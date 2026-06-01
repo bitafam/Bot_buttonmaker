@@ -19,14 +19,14 @@ bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 app = FastAPI()
 
-# 🗄️ دیتابیس موقت در حافظه سرور برای مدیریت وضعیت هر ادمین
+# 🗄️ دیتابیس موقت در حافظه سرور (کاملاً تفکیک‌شده برای هر کاربر)
 user_data = {}
 
-# 🔒 تابع کمکی امنیتی برای تشخیص دقیق ادمین‌ها
+# 🔒 تابع امنیتی برای تشخیص دقیق ادمین‌ها
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
-# تابع کمکی برای ریست کردن یا ساخت دیتای اولیه کاربر
+# تابع کمکی برای ریست کردن یا ساخت دیتای اولیه ادمین
 def init_user_data(user_id: int, reset_channel: bool = False):
     prev_channel = user_data.get(user_id, {}).get("target_channel") if not reset_channel else None
     user_data[user_id] = {
@@ -51,16 +51,14 @@ async def start(message: types.Message):
     current_channel = user_data[user_id]["target_channel"]
 
     text = (
-        "👋 <b>سلام رئیس! به نسخه نهایی ربات مدیریت کانال خوش آمدی.</b>\n\n"
-        f"📢 کانال فعلی شما برای عملیات: <b>{current_channel}</b>\n\n"
-        "🛠️ <b>انتخاب روش کار با ربات:</b>\n"
-        "۱. <b>ساخت پست دستی از صفر:</b> متن، عکس یا فایل خود را به ربات بفرستید.\n"
-        "۲. <b>ارسال دکمه خالی (مستقل):</b> بدون فرستادن فایل، روی دکمه زیر بزنید و دکمه خالی برای زیر آلبوم بسازید.\n\n"
+        "👋 <b>سلام رئیس! به ربات دکمه‌ساز و مدیریت کانال خوش آمدی.</b>\n\n"
+        f"📢 کانال فعلی شما برای ارسال پست: <b>{current_channel}</b>\n\n"
+        "📝 <b>چطور کار می‌کند؟</b>\n"
+        "کافیست متن، عکس، ویدیو، وویس یا فایل داکیومنت خود را به ربات بفرستید. سپس ربات منوی ساخت دکمه شیشه‌ای را برای همان پست باز خواهد کرد.\n\n"
         "⚙️ برای مدیریت ربات، سوئیچ بین کانال‌ها یا ریستارت از پنل زیر استفاده کنید:"
     )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ ساخت دکمه خالی (بدون فایل)", callback_data="start_pure_buttons")],
         [InlineKeyboardButton(text="⚙️ پنل مدیریت و تنظیمات", callback_data="admin_panel")],
     ])
         
@@ -72,9 +70,9 @@ async def help_command(message: types.Message):
     if not is_admin(message.from_user.id): return
     text = (
         "🤖 <b>راهنمای سریع دستورات ربات:</b>\n\n"
-        "🔹 /start - بازگشت به منوی اصلی و انتخاب روش کار\n"
+        "🔹 /start - بازگشت به منوی اصلی و بازنشانی وضعیت\n"
         "🔹 /help - نمایش این منوی راهنما\n\n"
-        "💡 <b>نکته برای پست‌های چند فایلی (آلبوم):</b> ابتدا پست را دستی در کانال بگذارید، سپس در ربات روی 'ساخت دکمه خالی' بزنید، دکمه‌ها را اضافه کنید و ارسال کنید تا دقیقاً زیر آلبوم شما چسبیده قرار بگیرد."
+        "💡 <b>نکته:</b> برای هر پست فقط یک پیام (متن یا فایل) بفرستید، دکمه‌ها را اضافه کنید و دکمه ارسال نهایی را بزنید."
     )
     await message.answer(text)
 
@@ -89,7 +87,7 @@ async def admin_panel(callback: types.CallbackQuery):
         f"👥 تعداد کل ادمین‌های مجاز: <code>{len(ADMIN_IDS)}</code> نفر\n"
         f"📢 تعداد کانال‌های متصل: <code>{len(CHANNEL_IDS)}</code> کانال\n"
         f"🎯 کانال فعال فعلی شما: <b>{user_data[user_id]['target_channel']}</b>\n\n"
-        "از منوی زیر برای تغییر کانال هدف یا ریستارت نرم‌افزاری ربات استفاده کنید:"
+        "از گزینه‌های زیر برای تغییر کانال یا ریستارت نرم‌افزاری ربات استفاده کنید:"
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -137,32 +135,18 @@ async def restart_bot_data(callback: types.CallbackQuery):
     await callback.message.delete()
     await start(callback.message)
 
-# ================== ورود به پروسه دکمه خالی ==================
-@dp.callback_query(lambda c: c.data == "start_pure_buttons")
-async def start_pure_buttons(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    if not is_admin(user_id): return
-
-    user_data[user_id]["message"] = None  # یعنی این پست فایلی ندارد و فقط دکمه خالی است
-    user_data[user_id]["buttons"] = []
-    user_data[user_id]["layout"] = "single"
-    user_data[user_id]["step"] = None
-
-    await callback.message.delete()
-    await show_post_menu(callback.message.chat.id, user_id)
-
 # ================== هسته پردازش پیام‌ها (ساخت پست دستی) ==================
 @dp.message()
 async def handle_incoming_messages(message: types.Message):
     user_id = message.from_user.id
     if not is_admin(user_id): return
 
-    # اگر کاربر در حال ارسال متن دکمه شیشه‌ای است
+    # ۱. اگر کاربر در حال ارسال متن دکمه شیشه‌ای است
     if user_data.get(user_id, {}).get("step") == "waiting_button":
         await save_button(message)
         return
 
-    # در غیر این صورت، پیام دریافتی (متن، عکس، فیلم) را به عنوان پست جدید دستی در نظر بگیر
+    # ۲. دریافت پیام جدید (متن، عکس، فیلم و...) برای ساخت پست
     current_ch = user_data.get(user_id, {}).get("target_channel", CHANNEL_IDS[0] if CHANNEL_IDS else None)
     user_data[user_id] = {
         "message": message, 
@@ -179,33 +163,22 @@ async def show_post_menu(chat_id, user_id):
     btn_count = len(data["buttons"])
     layout_text = "تک ردیفه 🟦" if data["layout"] == "single" else "دو ردیفه 🟩"
     target_ch = data["target_channel"]
-    is_pure_button = data["message"] is None
-
-    if is_pure_button:
-        header_text = f"🟩 <b>حالت: ارسال دکمه خالی (بدون متن و فایل برای زیر آلبوم)</b>\n🎯 ارسال به: <b>{target_ch}</b>"
-        action_btn_text = "🚀 ارسال دکمه خالی به کانال"
-        action_callback = "send_final_action"
-        extra_btns = []
-    else:
-        header_text = f"📝 <b>حالت: ساخت پست جدید دستی</b>\n🎯 ارسال به: <b>{target_ch}</b>"
-        action_btn_text = "📤 ارسال نهایی پست به کانال"
-        action_callback = "send_final_action"
-        extra_btns = [[InlineKeyboardButton(text="👁️ پیش‌نمایش پست", callback_data="preview_post")]]
 
     text = (
-        f"{header_text}\n"
+        f"📝 <b>حالت: ساخت پست جدید</b>\n"
+        f"🎯 کانال هدف: <b>{target_ch}</b>\n"
         f"🔢 تعداد دکمه‌های شیشه‌ای: {btn_count} عدد\n"
         f"📐 چیدمان دکمه‌ها: **{layout_text}**\n\n"
-        "👇 از گزینه‌های زیر برای تنظیم و ارسال نهایی استفاده کنید:"
+        "👇 دکمه‌های خود را اضافه کنید یا پست را ارسال کنید:"
     )
     
     keyboard_structure = [
         [InlineKeyboardButton(text="➕ اضافه کردن دکمه شیشه‌ای", callback_data="add_button")],
-        [InlineKeyboardButton(text="📐 تغییر چیدمان دکمه‌ها", callback_data="toggle_layout")]
+        [InlineKeyboardButton(text="📐 تغییر چیدمان دکمه‌ها", callback_data="toggle_layout")],
+        [InlineKeyboardButton(text="👁️ پیش‌نمایش پست", callback_data="preview_post")],
+        [InlineKeyboardButton(text="📤 ارسال نهایی پست به کانال", callback_data="send_final_action")],
+        [InlineKeyboardButton(text="🔙 انصراف و بازگشت", callback_data="back_to_start")]
     ]
-    keyboard_structure.extend(extra_btns)
-    keyboard_structure.append([InlineKeyboardButton(text=action_btn_text, callback_data=action_callback)])
-    keyboard_structure.append([InlineKeyboardButton(text="🔙 انصراف و بازگشت", callback_data="back_to_start")])
     
     await bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_structure))
 
@@ -214,7 +187,7 @@ async def add_button_prompt(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     if not is_admin(user_id): return
     user_data[user_id]["step"] = "waiting_button"
-    await callback.message.answer("📌 **فرمت ارسال دکمه:**\n`متن دکمه | لینک`\n\n💡 **مثال:**\n`📥 دانلود فایل | https://site.com/file`")
+    await callback.message.answer("📌 **فرمت ارسال دکمه:**\n<code>متن دکمه | لینک</code>\n\n💡 **مثال:**\n<code>📥 دانلود فایل | https://site.com/file</code>")
     await callback.answer()
 
 async def save_button(message: types.Message):
@@ -259,7 +232,7 @@ async def preview_post(callback: types.CallbackQuery):
     if not is_admin(user_id): return
     data = user_data.get(user_id)
     if data["message"]:
-        await callback.message.answer("👇 👁️ **پیش‌نمایش پست دست‌ساز شما:**")
+        await callback.message.answer("👇 👁️ **پیش‌نمایش پست شما:**")
         await forward_or_send(callback.message.chat.id, data["message"], build_keyboard(data["buttons"], data["layout"]))
     await callback.answer()
 
@@ -269,24 +242,18 @@ async def send_final_action(callback: types.CallbackQuery):
     if not is_admin(user_id): return
     
     data = user_data.get(user_id)
-    if not data["buttons"]:
-        return await callback.answer("⚠️ ابتدا باید حداقل یک دکمه بسازید!", show_alert=True)
+    if not data["message"]:
+        return await callback.answer("⚠️ پستی برای ارسال وجود ندارد. ابتدا یک فایل یا متن بفرستید.", show_alert=True)
         
     target_ch = data["target_channel"]
     keyboard = build_keyboard(data["buttons"], data["layout"])
     
     try:
-        if data["message"] is None:
-            # 🚀 روش دوم: ارسال دکمه مستقل با کاراکتر نامرئی برای زیر آلبوم چندفایلی
-            invisible_char = "‎" 
-            await bot.send_message(chat_id=target_ch, text=invisible_char, reply_markup=keyboard)
-            await callback.answer("🚀 دکمه خالی با موفقیت به کانال ارسال شد و زیر آلبوم جفت شد!", show_alert=True)
-        else:
-            # 📝 روش اول: ارسال پست دستی کامل ساخته شده در ربات
-            await forward_or_send(target_ch, data["message"], keyboard)
-            await callback.answer(f"🚀 پست کامل با موفقیت به کانال ارسال شد!", show_alert=True)
+        # ارسال پست کامل ساخته شده به همراه کیبورد دکمه‌ها
+        await forward_or_send(target_ch, data["message"], keyboard)
+        await callback.answer("🚀 پست با موفقیت به کانال ارسال شد!", show_alert=True)
         
-        # ریست کردن دکمه‌ها و اطلاعات پس از ارسال موفق
+        # پاکسازی حافظه موقت این ادمین و هدایت به منوی اول
         init_user_data(user_id)
         await callback.message.delete()
         await start(callback.message)
