@@ -78,7 +78,9 @@ async def send_to_channel(callback: types.CallbackQuery):
 # ================== Webhook ==================
 @app.post("/webhook")
 async def webhook(request: Request):
-    update = types.Update.model_validate(await request.json())
+    # دریافت دیتای خام از تلگرام و فرستادن به aiogram
+    json_data = await request.json()
+    update = types.Update.model_validate(json_data, context={"bot": bot})
     await dp.feed_update(bot, update)
     return {"ok": True}
 
@@ -86,10 +88,15 @@ async def webhook(request: Request):
 async def on_startup():
     webhook_url = os.getenv("WEBHOOK_URL")
     if webhook_url:
+        # اگر خودت آخرش /webhook نذاشته بودی، کد خودش اضافه میکنه
+        if not webhook_url.endswith("/webhook"):
+            webhook_url = webhook_url.rstrip("/") + "/webhook"
+            
         await bot.set_webhook(webhook_url)
-        print("Webhook تنظیم شد!")
+        print(f"🚀 Webhook set to: {webhook_url}")
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 8080))
+    # رندر پورت رو اتوماتیک میده، اگه نبود میره روی 8000
+    port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
