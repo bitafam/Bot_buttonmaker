@@ -1,4 +1,3 @@
-aiogram==3.13.0
-fastapi==0.115.0
-uvicorn==0.30.0
-python-multipart==0.0.12
+aiogram==3.13.0  # یا نسخه جدیدتر (3.23+ پشتیبانی بهتر از 3.14 داره)
+pydantic>=2.10    # خیلی مهم
+pydantic-core>=2.25  # نسخه‌های جدیدتر wheels بهتری برای 3.14 دارن
