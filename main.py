@@ -1,17 +1,20 @@
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.client.default import DefaultBotProperties 
 from fastapi import FastAPI, Request
 import os
 
 TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 
-bot = Bot(token=TOKEN, parse_mode="HTML")
+
+bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML")) 
 dp = Dispatcher()
 app = FastAPI()
 
 user_data = {}
+
 
 # ================== start ==================
 @dp.message(Command("start"))
