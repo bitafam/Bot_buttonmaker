@@ -1,6 +1,6 @@
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 from aiogram.client.default import DefaultBotProperties
 from fastapi import FastAPI, Request
 import os
@@ -24,7 +24,7 @@ user_data = {}
 
 # 🔒 تابع امنیتی برای تشخیص دقیق ادمین‌ها
 def is_admin(user_id: int) -> bool:
-    return user_id in ADMIN_IDS
+    return user_id in ADMIN_IDS manipulation
 
 # تابع کمکی برای ریست کردن یا ساخت دیتای اولیه ادمین
 def init_user_data(user_id: int, reset_channel: bool = False):
@@ -46,9 +46,7 @@ async def start(message: types.Message):
         await message.answer("❌ شما دسترسی به این ربات شخصی را ندارید.")
         return
 
-    if user_id not in user_data:
-        init_user_data(user_id)
-
+    init_user_data(user_id)
     current_channel = user_data[user_id]["target_channel"]
 
     text = (
@@ -65,6 +63,22 @@ async def start(message: types.Message):
         
     await message.answer(text, reply_markup=kb)
 
+# ================== 🔄 دستور اختصاصی /clear (پاکسازی حافظه) ==================
+@dp.message(Command("clear"))
+async def clear_memory_command(message: types.Message):
+    user_id = message.from_user.id
+    if not is_admin(user_id): return
+
+    # پاکسازی کامل وضعیت و دکمه‌های در حال ساخت بدون تغییر کانال هدف
+    init_user_data(user_id, reset_channel=False)
+    
+    text = (
+        "🧹 <b>حافظه ربات با موفقیت پاکسازی شد!</b>\n\n"
+        "🔄 وضعیت شما به حالت اولیه برگشت. دکمه‌ها یا متن‌های نیمه‌کاره حذف شدند.\n"
+        "اکنون می‌توانید بدون مشکل پست جدید خود را بفرستید یا از دستور /start استفاده کنید."
+    )
+    await message.answer(text)
+
 # ================== دستور /help ==================
 @dp.message(Command("help"))
 async def help_command(message: types.Message):
@@ -72,6 +86,7 @@ async def help_command(message: types.Message):
     text = (
         "🤖 <b>راهنمای سریع دستورات ربات:</b>\n\n"
         "🔹 /start - بازگشت به منوی اصلی و بازنشانی وضعیت\n"
+        "🔹 /clear - 🧹 پاکسازی فوری حافظه ربات در صورت هنگ کردن دکمه‌ها\n"
         "🔹 /help - نمایش این منوی راهنما\n\n"
         "💡 <b>ارسال گروهی دکمه‌ها:</b> شما می‌توانید چندین دکمه را یکجا بفرستید! کافیست هر دکمه را در یک خط جدید با فرمت <code>متن | لینک</code> وارد کنید."
     )
@@ -142,6 +157,10 @@ async def handle_incoming_messages(message: types.Message):
     user_id = message.from_user.id
     if not is_admin(user_id): return
 
+    # اگر پیام دستور تلگرامی بود (مثل /start یا /clear)، به عنوان پست جدید پردازش نشود
+    if message.text and message.text.startswith("/"):
+        return
+
     current_step = user_data.get(user_id, {}).get("step")
 
     # ۱. حالت دریافت دکمه شیشه‌ای (تکی یا گروهی)
@@ -192,7 +211,7 @@ async def show_post_menu(chat_id, user_id):
     
     await bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_structure))
 
-# --- بخش اضافه کردن هوشمند دکمه‌ها (تکی یا چندین دکمه یکجا) ---
+# --- بخش اضافه کردن هوشمند دکمه‌ها ---
 @dp.callback_query(lambda c: c.data == "add_button")
 async def add_button_prompt(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -211,6 +230,11 @@ async def add_button_prompt(callback: types.CallbackQuery):
 
 async def save_multiple_buttons(message: types.Message):
     user_id = message.from_user.id
+    
+    if message.text and message.text.startswith("/"):
+        user_data[user_id]["step"] = None
+        return
+
     lines = message.text.strip().split("\n")
     success_count = 0
     
@@ -244,6 +268,11 @@ async def edit_post_text_prompt(callback: types.CallbackQuery):
 
 async def save_edited_text(message: types.Message):
     user_id = message.from_user.id
+    
+    if message.text and message.text.startswith("/"):
+        user_data[user_id]["step"] = None
+        return
+
     user_data[user_id]["edited_text"] = message.text
     user_data[user_id]["step"] = None
     await message.answer("✅ متن جدید با موفقیت ذخیره شد.")
@@ -340,6 +369,13 @@ async def webhook(request: Request):
 
 @app.on_event("startup")
 async def on_startup():
+    # ⭐ اضافه کردن منوی دستورات به تلگرام به محض روشن شدن ربات
+    await bot.set_my_commands([
+        BotCommand(command="start", description="🏠 منوی اصلی"),
+        BotCommand(command="clear", description="🧹 پاکسازی حافظه و رفع هنگ"),
+        BotCommand(command="help", description="❓ راهنمای ربات")
+    ])
+
     webhook_url = os.getenv("WEBHOOK_URL")
     if webhook_url:
         if not webhook_url.endswith("/webhook"): webhook_url = webhook_url.rstrip("/") + "/webhook"
