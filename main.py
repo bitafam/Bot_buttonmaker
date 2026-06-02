@@ -31,6 +31,7 @@ def init_user_data(user_id: int, reset_channel: bool = False):
     prev_channel = user_data.get(user_id, {}).get("target_channel") if not reset_channel else None
     user_data[user_id] = {
         "message": None, 
+        "edited_text": None, # متغیر جدید برای ذخیره مطمئن متن ویرایش شده
         "buttons": [], 
         "layout": "single", 
         "step": None, 
@@ -72,7 +73,7 @@ async def help_command(message: types.Message):
         "🤖 <b>راهنمای سریع دستورات ربات:</b>\n\n"
         "🔹 /start - بازگشت به منوی اصلی و بازنشانی وضعیت\n"
         "🔹 /help - نمایش این منوی راهنما\n\n"
-        "💡 <b>قابلیت ویرایش:</b> بعد از فرستادن پست، می‌توانید دکمه '✏️ ویرایش متن / کپشن' را بزنید تا بدون حذف شدن دکمه‌های شیشه‌ای، متن پست خود را تغییر دهید."
+        "💡 <b>قابلیت ویرایش:</b> بعد از فرستادن پست، می‌توانید دکمه '✏️ ویرایش متن / کپشن پست' را بزنید تا بدون حذف شدن دکمه‌های شیشه‌ای، متن پست خود را تغییر دهید."
     )
     await message.answer(text)
 
@@ -157,6 +158,7 @@ async def handle_incoming_messages(message: types.Message):
     current_ch = user_data.get(user_id, {}).get("target_channel", CHANNEL_IDS[0] if CHANNEL_IDS else None)
     user_data[user_id] = {
         "message": message, 
+        "edited_text": None, # ریست کردن متن ویرایش شده برای پست جدید
         "buttons": [], 
         "layout": "single",
         "step": None,
@@ -222,16 +224,10 @@ async def edit_post_text_prompt(callback: types.CallbackQuery):
 
 async def save_edited_text(message: types.Message):
     user_id = message.from_user.id
-    new_text = message.text
-    
-    # اعمال متن جدید روی ساختار پیام قبلی (چه متن خالی باشد، چه کپشن رسانه)
-    if user_data[user_id]["message"].text:
-        user_data[user_id]["message"].text = new_text
-    else:
-        user_data[user_id]["message"].caption = new_text
-        
+    # ذخیره در متغیر اختصاصی برای جلوگیری از ارور Read-only تلگرام
+    user_data[user_id]["edited_text"] = message.text
     user_data[user_id]["step"] = None
-    await message.answer("✅ متن پست با موفقیت ویرایش شد.")
+    await message.answer("✅ متن جدید با موفقیت ذخیره شد.")
     await show_post_menu(message.chat.id, user_id)
 
 # --- چیدمان دکمه‌ها ---
@@ -266,64 +262,4 @@ async def preview_post(callback: types.CallbackQuery):
     data = user_data.get(user_id)
     if data["message"]:
         await callback.message.answer("👇 👁️ **پیش‌نمایش پست شما:**")
-        await forward_or_send(callback.message.chat.id, data["message"], build_keyboard(data["buttons"], data["layout"]))
-    await callback.answer()
-
-@dp.callback_query(lambda c: c.data == "send_final_action")
-async def send_final_action(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    if not is_admin(user_id): return
-    
-    data = user_data.get(user_id)
-    if not data["message"]:
-        return await callback.answer("⚠️ پستی برای ارسال وجود ندارد. ابتدا یک فایل یا متن بفرستید.", show_alert=True)
-        
-    target_ch = data["target_channel"]
-    keyboard = build_keyboard(data["buttons"], data["layout"])
-    
-    try:
-        await forward_or_send(target_ch, data["message"], keyboard)
-        await callback.answer("🚀 پست با موفقیت به کانال ارسال شد!", show_alert=True)
-        
-        # پاکسازی حافظه موقت این ادمین
-        init_user_data(user_id)
-        await callback.message.delete()
-        await start(callback.message)
-    except Exception as e:
-        await callback.answer(f"❌ خطا! مطمئن شوید ربات در کانال ادمین است.\nمشخصات: {str(e)}", show_alert=True)
-
-async def forward_or_send(target_chat, original, keyboard):
-    if original.text: await bot.send_message(target_chat, original.text, reply_markup=keyboard)
-    elif original.photo: await bot.send_photo(target_chat, original.photo[-1].file_id, caption=original.caption, reply_markup=keyboard)
-    elif original.video: await bot.send_video(target_chat, original.video.file_id, caption=original.caption, reply_markup=keyboard)
-    elif original.document: await bot.send_document(target_chat, original.document.file_id, caption=original.caption, reply_markup=keyboard)
-    elif original.voice: await bot.send_voice(target_chat, original.voice.file_id, caption=original.caption, reply_markup=keyboard)
-    elif original.audio: await bot.send_audio(target_chat, original.audio.file_id, caption=original.caption, reply_markup=keyboard)
-
-@dp.callback_query(lambda c: c.data == "back_to_start")
-async def back_to_start(callback: types.CallbackQuery):
-    if not is_admin(callback.from_user.id): return
-    await callback.message.delete()
-    init_user_data(callback.from_user.id)
-    await start(callback.message)
-
-# ================== Webhook Server ==================
-@app.post("/webhook")
-async def webhook(request: Request):
-    json_data = await request.json()
-    update = types.Update.model_validate(json_data, context={"bot": bot})
-    await dp.feed_update(bot, update)
-    return {"ok": True}
-
-@app.on_event("startup")
-async def on_startup():
-    webhook_url = os.getenv("WEBHOOK_URL")
-    if webhook_url:
-        if not webhook_url.endswith("/webhook"): webhook_url = webhook_url.rstrip("/") + "/webhook"
-        await bot.set_webhook(webhook_url)
-        print(f"🚀 Webhook set to: {webhook_url}")
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+        await forward_or_send(callback.message.chat.id, data["message"], build_keyboard(data["buttons"], data["layout"]), data
