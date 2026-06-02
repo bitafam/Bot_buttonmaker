@@ -73,7 +73,7 @@ async def help_command(message: types.Message):
         "🤖 <b>راهنمای سریع دستورات ربات:</b>\n\n"
         "🔹 /start - بازگشت به منوی اصلی و بازنشانی وضعیت\n"
         "🔹 /help - نمایش این منوی راهنما\n\n"
-        "💡 <b>قابلیت ویرایش:</b> بعد از فرستادن پست، می‌توانید دکمه '✏️ ویرایش متن / کپشن پست' را بزنید تا بدون حذف شدن دکمه‌های شیشه‌ای، متن پست خود را تغییر دهید."
+        "💡 <b>ارسال گروهی دکمه‌ها:</b> شما می‌توانید چندین دکمه را یکجا بفرستید! کافیست هر دکمه را در یک خط جدید با فرمت <code>متن | لینک</code> وارد کنید."
     )
     await message.answer(text)
 
@@ -144,9 +144,9 @@ async def handle_incoming_messages(message: types.Message):
 
     current_step = user_data.get(user_id, {}).get("step")
 
-    # ۱. حالت دریافت دکمه شیشه‌ای جدید
+    # ۱. حالت دریافت دکمه شیشه‌ای (تکی یا گروهی)
     if current_step == "waiting_button":
-        await save_button(message)
+        await save_multiple_buttons(message)
         return
 
     # ۲. حالت دریافت متن یا کپشن ویرایش شده
@@ -182,7 +182,7 @@ async def show_post_menu(chat_id, user_id):
     )
     
     keyboard_structure = [
-        [InlineKeyboardButton(text="➕ اضافه کردن دکمه شیشه‌ای", callback_data="add_button")],
+        [InlineKeyboardButton(text="➕ اضافه کردن دکمه (تکی یا گروهی)", callback_data="add_button")],
         [InlineKeyboardButton(text="📐 تغییر چیدمان دکمه‌ها", callback_data="toggle_layout")],
         [InlineKeyboardButton(text="✏️ ویرایش متن / کپشن پست", callback_data="edit_post_text")],
         [InlineKeyboardButton(text="👁️ پیش‌نمایش پست", callback_data="preview_post")],
@@ -192,26 +192,46 @@ async def show_post_menu(chat_id, user_id):
     
     await bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_structure))
 
-# --- بخش اضافه کردن دکمه شیشه‌ای ---
+# --- بخش اضافه کردن هوشمند دکمه‌ها (تکی یا چندین دکمه یکجا) ---
 @dp.callback_query(lambda c: c.data == "add_button")
 async def add_button_prompt(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     if not is_admin(user_id): return
     user_data[user_id]["step"] = "waiting_button"
-    await callback.message.answer("📌 **فرمت ارسال دکمه:**\n<code>متن دکمه | لینک</code>\n\n💡 **مثال:**\n<code>📥 دانلود فایل | https://site.com/file</code>")
+    
+    instruction = (
+        "📌 **فرمت ارسال دکمه (تکی یا گروهی):**\n"
+        "<code>متن دکمه | لینک</code>\n\n"
+        "💡 **نکته عالی:** می‌توانید چند دکمه را یکجا بفرستید! کافیست هر دکمه را در یک **خط جدید** بنویسید. مانند:\n"
+        "<code>📥 دانلود فیلم | https://site.com/1</code>\n"
+        "<code>💬 بخش نظرات | https://site.com/2</code>"
+    )
+    await callback.message.answer(instruction)
     await callback.answer()
 
-async def save_button(message: types.Message):
+async def save_multiple_buttons(message: types.Message):
     user_id = message.from_user.id
-    try:
-        text, url = [x.strip() for x in message.text.split("|", 1)]
-        if not url.startswith("http"): url = "https://" + url
-        user_data[user_id]["buttons"].append({"text": text, "url": url})
+    lines = message.text.strip().split("\n")
+    success_count = 0
+    
+    for line in lines:
+        if not line.strip() or "|" not in line:
+            continue
+        try:
+            text, url = [x.strip() for x in line.split("|", 1)]
+            if not url.startswith("http"): 
+                url = "https://" + url
+            user_data[user_id]["buttons"].append({"text": text, "url": url})
+            success_count += 1
+        except:
+            continue
+            
+    if success_count > 0:
         user_data[user_id]["step"] = None
-        await message.answer("✅ دکمه با موفقیت اضافه شد.")
+        await message.answer(f"✅ تعداد {success_count} دکمه با موفقیت به لیست اضافه شد.")
         await show_post_menu(message.chat.id, user_id)
-    except:
-        await message.answer("❌ فرمت اشتباه! دوباره بفرستید:\n`متن | لینک`")
+    else:
+        await message.answer("❌ هیچ دکمه سالمی یافت نشد! لطفاً فرمت را رعایت کنید:\n`متن | لینک` (هر دکمه در یک خط)")
 
 # --- بخش ویرایش متن / کپشن ---
 @dp.callback_query(lambda c: c.data == "edit_post_text")
@@ -261,7 +281,6 @@ async def preview_post(callback: types.CallbackQuery):
     data = user_data.get(user_id)
     if data["message"]:
         await callback.message.answer("👇 👁️ **پیش‌نمایش پست شما:**")
-        # اینجا پرانتز با موفقیت بسته شد و خطا برطرف گردید 👇
         await forward_or_send(callback.message.chat.id, data["message"], build_keyboard(data["buttons"], data["layout"]), data["edited_text"])
     await callback.answer()
 
