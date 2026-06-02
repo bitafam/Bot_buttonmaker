@@ -7,7 +7,7 @@ import os
 
 TOKEN = os.getenv("BOT_TOKEN")
 
-# 👥 دریافت لیست ادمین‌ها از رندر و تبدیل به لیست عددی پایتون
+# 👥 دریافت لیست ادمین‌ها از رندر
 ADMINS_STR = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS = [int(x.strip()) for x in ADMINS_STR.split(",") if x.strip().isdigit()]
 
@@ -54,8 +54,8 @@ async def start(message: types.Message):
         "👋 <b>سلام رئیس! به ربات دکمه‌ساز و مدیریت کانال خوش آمدی.</b>\n\n"
         f"📢 کانال فعلی شما برای ارسال پست: <b>{current_channel}</b>\n\n"
         "📝 <b>چطور کار می‌کند؟</b>\n"
-        "کافیست متن، عکس، ویدیو، وویس یا فایل داکیومنت خود را به ربات بفرستید. سپس ربات منوی ساخت دکمه شیشه‌ای را برای همان پست باز خواهد کرد.\n\n"
-        "⚙️ برای مدیریت ربات، سوئیچ بین کانال‌ها یا ریستارت از پنل زیر استفاده کنید:"
+        "کافیست متن، عکس، ویدیو، وویس یا فایل داکیومنت خود را به ربات بفرستید تا منوی ساخت دکمه و ویرایش برای شما باز شود.\n\n"
+        "⚙️ برای تنظیمات یا ریستارت از پنل زیر استفاده کنید:"
     )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -72,7 +72,7 @@ async def help_command(message: types.Message):
         "🤖 <b>راهنمای سریع دستورات ربات:</b>\n\n"
         "🔹 /start - بازگشت به منوی اصلی و بازنشانی وضعیت\n"
         "🔹 /help - نمایش این منوی راهنما\n\n"
-        "💡 <b>نکته:</b> برای هر پست فقط یک پیام (متن یا فایل) بفرستید، دکمه‌ها را اضافه کنید و دکمه ارسال نهایی را بزنید."
+        "💡 <b>قابلیت ویرایش:</b> بعد از فرستادن پست، می‌توانید دکمه '✏️ ویرایش متن / کپشن' را بزنید تا بدون حذف شدن دکمه‌های شیشه‌ای، متن پست خود را تغییر دهید."
     )
     await message.answer(text)
 
@@ -124,7 +124,7 @@ async def set_channel(callback: types.CallbackQuery):
     await callback.answer(f"کانال هدف به {selected_channel} تغییر یافت.")
     await admin_panel(callback)
 
-# 🔄 عملیات دکمه ریستارت (پاک کردن حافظه نشست کاربر در صورت بروز اختلال)
+# 🔄 عملیات دکمه ریستارت
 @dp.callback_query(lambda c: c.data == "restart_bot_data")
 async def restart_bot_data(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -135,18 +135,25 @@ async def restart_bot_data(callback: types.CallbackQuery):
     await callback.message.delete()
     await start(callback.message)
 
-# ================== هسته پردازش پیام‌ها (ساخت پست دستی) ==================
+# ================== هسته پردازش پیام‌ها و استپ‌ها ==================
 @dp.message()
 async def handle_incoming_messages(message: types.Message):
     user_id = message.from_user.id
     if not is_admin(user_id): return
 
-    # ۱. اگر کاربر در حال ارسال متن دکمه شیشه‌ای است
-    if user_data.get(user_id, {}).get("step") == "waiting_button":
+    current_step = user_data.get(user_id, {}).get("step")
+
+    # ۱. حالت دریافت دکمه شیشه‌ای جدید
+    if current_step == "waiting_button":
         await save_button(message)
         return
 
-    # ۲. دریافت پیام جدید (متن، عکس، فیلم و...) برای ساخت پست
+    # ۲. حالت دریافت متن یا کپشن ویرایش شده
+    if current_step == "waiting_edit_text":
+        await save_edited_text(message)
+        return
+
+    # ۳. دریافت پیام جدید (متن، عکس، فیلم و...) برای ساخت پست از صفر
     current_ch = user_data.get(user_id, {}).get("target_channel", CHANNEL_IDS[0] if CHANNEL_IDS else None)
     user_data[user_id] = {
         "message": message, 
@@ -157,7 +164,7 @@ async def handle_incoming_messages(message: types.Message):
     }
     await show_post_menu(message.chat.id, user_id)
 
-# ================== منوی مدیریت دکمه‌ها و ارسال ==================
+# ================== منوی مدیریت دکمه‌ها، ویرایش و ارسال ==================
 async def show_post_menu(chat_id, user_id):
     data = user_data.get(user_id)
     btn_count = len(data["buttons"])
@@ -169,12 +176,13 @@ async def show_post_menu(chat_id, user_id):
         f"🎯 کانال هدف: <b>{target_ch}</b>\n"
         f"🔢 تعداد دکمه‌های شیشه‌ای: {btn_count} عدد\n"
         f"📐 چیدمان دکمه‌ها: **{layout_text}**\n\n"
-        "👇 دکمه‌های خود را اضافه کنید یا پست را ارسال کنید:"
+        "👇 دکمه‌های خود را اضافه کنید، متن را ویرایش کنید یا پست را ارسال کنید:"
     )
     
     keyboard_structure = [
         [InlineKeyboardButton(text="➕ اضافه کردن دکمه شیشه‌ای", callback_data="add_button")],
         [InlineKeyboardButton(text="📐 تغییر چیدمان دکمه‌ها", callback_data="toggle_layout")],
+        [InlineKeyboardButton(text="✏️ ویرایش متن / کپشن پست", callback_data="edit_post_text")],
         [InlineKeyboardButton(text="👁️ پیش‌نمایش پست", callback_data="preview_post")],
         [InlineKeyboardButton(text="📤 ارسال نهایی پست به کانال", callback_data="send_final_action")],
         [InlineKeyboardButton(text="🔙 انصراف و بازگشت", callback_data="back_to_start")]
@@ -182,6 +190,7 @@ async def show_post_menu(chat_id, user_id):
     
     await bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_structure))
 
+# --- بخش اضافه کردن دکمه شیشه‌ای ---
 @dp.callback_query(lambda c: c.data == "add_button")
 async def add_button_prompt(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -202,6 +211,30 @@ async def save_button(message: types.Message):
     except:
         await message.answer("❌ فرمت اشتباه! دوباره بفرستید:\n`متن | لینک`")
 
+# --- بخش ویرایش متن / کپشن ---
+@dp.callback_query(lambda c: c.data == "edit_post_text")
+async def edit_post_text_prompt(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    if not is_admin(user_id): return
+    user_data[user_id]["step"] = "waiting_edit_text"
+    await callback.message.answer("✏️ **حالا متن یا کپشن جدید خود را ارسال کنید:**\n(دکمه‌های شیشه‌ای قبلی شما بدون تغییر باقی می‌مانند)")
+    await callback.answer()
+
+async def save_edited_text(message: types.Message):
+    user_id = message.from_user.id
+    new_text = message.text
+    
+    # اعمال متن جدید روی ساختار پیام قبلی (چه متن خالی باشد، چه کپشن رسانه)
+    if user_data[user_id]["message"].text:
+        user_data[user_id]["message"].text = new_text
+    else:
+        user_data[user_id]["message"].caption = new_text
+        
+    user_data[user_id]["step"] = None
+    await message.answer("✅ متن پست با موفقیت ویرایش شد.")
+    await show_post_menu(message.chat.id, user_id)
+
+# --- چیدمان دکمه‌ها ---
 @dp.callback_query(lambda c: c.data == "toggle_layout")
 async def toggle_layout(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -249,11 +282,10 @@ async def send_final_action(callback: types.CallbackQuery):
     keyboard = build_keyboard(data["buttons"], data["layout"])
     
     try:
-        # ارسال پست کامل ساخته شده به همراه کیبورد دکمه‌ها
         await forward_or_send(target_ch, data["message"], keyboard)
         await callback.answer("🚀 پست با موفقیت به کانال ارسال شد!", show_alert=True)
         
-        # پاکسازی حافظه موقت این ادمین و هدایت به منوی اول
+        # پاکسازی حافظه موقت این ادمین
         init_user_data(user_id)
         await callback.message.delete()
         await start(callback.message)
