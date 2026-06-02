@@ -24,7 +24,7 @@ user_data = {}
 
 # 🔒 تابع امنیتی برای تشخیص دقیق ادمین‌ها
 def is_admin(user_id: int) -> bool:
-    return user_id in ADMIN_IDS manipulation
+    return user_id in ADMIN_IDS
 
 # تابع کمکی برای ریست کردن یا ساخت دیتای اولیه ادمین
 def init_user_data(user_id: int, reset_channel: bool = False):
