@@ -19,8 +19,10 @@ bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 app = FastAPI()
 
-# 🗄️ دیتابیس موقت در حافظه سرور (کاملاً تفکیک‌شده برای هر کاربر)
+# 🗄️ دیتابیس موقت در حافظه سرور
 user_data = {}
+# دیتابیس ذخیره دکمه‌های دائمی برای هر کانال
+channel_persistent_buttons = {}
 
 # 🔒 تابع امنیتی برای تشخیص دقیق ادمین‌ها
 def is_admin(user_id: int) -> bool:
@@ -32,13 +34,15 @@ def init_user_data(user_id: int, reset_channel: bool = False):
     user_data[user_id] = {
         "message": None, 
         "edited_text": None, 
+        "edited_entities": None, # برای حفظ فرمت‌های متن
         "buttons": [], 
         "layout": "single", 
         "step": None, 
+        "same_name_title": None,
         "target_channel": prev_channel if prev_channel else (CHANNEL_IDS[0] if CHANNEL_IDS else None)
     }
 
-# ================== دستور /start ==================
+# ================== دستورات اصلی ==================
 @dp.message(Command("start"))
 async def start(message: types.Message):
     user_id = message.from_user.id
@@ -50,47 +54,18 @@ async def start(message: types.Message):
     current_channel = user_data[user_id]["target_channel"]
 
     text = (
-        "👋 <b>سلام رئیس! به ربات دکمه‌ساز و مدیریت کانال خوش آمدی.</b>\n\n"
+        "👋 <b>سلام رئیس! به ربات دکمه‌ساز فوق پیشرفته خوش آمدی.</b>\n\n"
         f"📢 کانال فعلی شما برای ارسال پست: <b>{current_channel}</b>\n\n"
-        "📝 <b>چطور کار می‌کند؟</b>\n"
-        "کافیست متن، عکس، ویدیو، وویس یا فایل داکیومنت خود را به ربات بفرستید تا منوی ساخت دکمه و ویرایش برای شما باز شود.\n\n"
-        "⚙️ برای تنظیمات یا ریستارت از پنل زیر استفاده کنید:"
+        "⚙️ برای تنظیمات دکمه‌های ثابت کانال‌ها یا ریستارت از پنل زیر استفاده کنید:"
     )
-    
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⚙️ پنل مدیریت و تنظیمات", callback_data="admin_panel")],
-    ])
-        
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⚙️ پنل مدیریت و تنظیمات پیشرفته", callback_data="admin_panel")]])
     await message.answer(text, reply_markup=kb)
 
-# ================== 🔄 دستور اختصاصی /clear (پاکسازی حافظه) ==================
 @dp.message(Command("clear"))
 async def clear_memory_command(message: types.Message):
-    user_id = message.from_user.id
-    if not is_admin(user_id): return
-
-    # پاکسازی کامل وضعیت و دکمه‌های در حال ساخت بدون تغییر کانال هدف
-    init_user_data(user_id, reset_channel=False)
-    
-    text = (
-        "🧹 <b>حافظه ربات با موفقیت پاکسازی شد!</b>\n\n"
-        "🔄 وضعیت شما به حالت اولیه برگشت. دکمه‌ها یا متن‌های نیمه‌کاره حذف شدند.\n"
-        "اکنون می‌توانید بدون مشکل پست جدید خود را بفرستید یا از دستور /start استفاده کنید."
-    )
-    await message.answer(text)
-
-# ================== دستور /help ==================
-@dp.message(Command("help"))
-async def help_command(message: types.Message):
     if not is_admin(message.from_user.id): return
-    text = (
-        "🤖 <b>راهنمای سریع دستورات ربات:</b>\n\n"
-        "🔹 /start - بازگشت به منوی اصلی و بازنشانی وضعیت\n"
-        "🔹 /clear - 🧹 پاکسازی فوری حافظه ربات در صورت هنگ کردن دکمه‌ها\n"
-        "🔹 /help - نمایش این منوی راهنما\n\n"
-        "💡 <b>ارسال گروهی دکمه‌ها:</b> شما می‌توانید چندین دکمه را یکجا بفرستید! کافیست هر دکمه را در یک خط جدید با فرمت <code>متن | لینک</code> وارد کنید."
-    )
-    await message.answer(text)
+    init_user_data(message.from_user.id, reset_channel=False)
+    await message.answer("🧹 <b>حافظه موقت پست جاری با موفقیت پاکسازی و ریست شد!</b>")
 
 # ================== ⚙️ پنل مدیریت و تنظیمات پیشرفته ==================
 @dp.callback_query(lambda c: c.data == "admin_panel")
@@ -98,17 +73,20 @@ async def admin_panel(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     if not is_admin(user_id): return
 
+    target_ch = user_data[user_id]['target_channel']
+    p_btn = channel_persistent_buttons.get(target_ch)
+    p_btn_status = f"✅ فعال ({p_btn['text']})" if p_btn else "❌ غیرفعال"
+
     text = (
         "⚙️ <b>پنل مدیریت و تنظیمات ربات</b>\n\n"
-        f"👥 تعداد کل ادمین‌های مجاز: <code>{len(ADMIN_IDS)}</code> نفر\n"
-        f"📢 تعداد کانال‌های متصل: <code>{len(CHANNEL_IDS)}</code> کانال\n"
-        f"🎯 کانال فعال فعلی شما: <b>{user_data[user_id]['target_channel']}</b>\n\n"
-        "از گزینه‌های زیر برای تغییر کانال یا ریستارت نرم‌افزاری ربات استفاده کنید:"
+        f"🎯 کانال فعال فعلی: <b>{target_ch}</b>\n"
+        f"🔗 دکمه ثابت این کانال: <b>{p_btn_status}</b>\n\n"
+        "یکی از گزینه‌های زیر را انتخاب کنید:"
     )
-
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 تغییر کانال هدف", callback_data="change_channel")],
-        [InlineKeyboardButton(text="🔄 ریستارت ربات و حافظه", callback_data="restart_bot_data")],
+        [InlineKeyboardButton(text="💎 تنظیم دکمه ثابت این کانال", callback_data="setup_persistent_btn")],
+        [InlineKeyboardButton(text="🔄 ریستارت کل ربات و حافظه", callback_data="restart_bot_data")],
         [InlineKeyboardButton(text="🔙 بازگشت به منوی اصلی", callback_data="back_to_start")]
     ])
     await callback.message.edit_text(text, reply_markup=kb)
@@ -117,15 +95,10 @@ async def admin_panel(callback: types.CallbackQuery):
 async def change_channel_menu(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     if not is_admin(user_id): return
-        
-    if not CHANNEL_IDS:
-        return await callback.answer("❌ هیچ کانالی در رندر تعریف نشده است!", show_alert=True)
-        
     inline_keyboard = []
     for ch in CHANNEL_IDS:
         status = "✅ " if user_data.get(user_id, {}).get("target_channel") == ch else ""
         inline_keyboard.append([InlineKeyboardButton(text=f"{status}{ch}", callback_data=f"set_ch:{ch}")])
-        
     inline_keyboard.append([InlineKeyboardButton(text="🔙 بازگشت به پنل", callback_data="admin_panel")])
     await callback.message.edit_text("🎯 کانال مورد نظر خود را برای ارسال انتخاب کنید:", reply_markup=InlineKeyboardMarkup(inline_keyboard=inline_keyboard))
 
@@ -133,152 +106,277 @@ async def change_channel_menu(callback: types.CallbackQuery):
 async def set_channel(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     if not is_admin(user_id): return
-    
     selected_channel = callback.data.split(":", 1)[1]
     user_data[user_id]["target_channel"] = selected_channel
-    
     await callback.answer(f"کانال هدف به {selected_channel} تغییر یافت.")
     await admin_panel(callback)
 
-# 🔄 عملیات دکمه ریستارت
 @dp.callback_query(lambda c: c.data == "restart_bot_data")
 async def restart_bot_data(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     if not is_admin(user_id): return
-
     init_user_data(user_id, reset_channel=True)
-    await callback.answer("🔄 ربات با موفقیت ریستارت شد و حافظه موقت شما پاک گردید.", show_alert=True)
+    await callback.answer("🔄 ربات کاملاً ریستارت شد.", show_alert=True)
     await callback.message.delete()
     await start(callback.message)
+
+@dp.callback_query(lambda c: c.data == "setup_persistent_btn")
+async def setup_persistent_btn(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    if not is_admin(user_id): return
+    target_ch = user_data[user_id]['target_channel']
+    user_data[user_id]["step"] = "waiting_persistent_btn"
+    await callback.message.answer(f"💎 <b>تنظیم دکمه ثابت برای کانال: {target_ch}</b>\n\nفرمت ارسال:\n<code>متن دکمه | لینک</code>\n\nبرای حذف عبارت <code>حذف</code> را بفرستید.")
+    await callback.answer()
 
 # ================== هسته پردازش پیام‌ها و استپ‌ها ==================
 @dp.message()
 async def handle_incoming_messages(message: types.Message):
     user_id = message.from_user.id
     if not is_admin(user_id): return
-
-    # اگر پیام دستور تلگرامی بود (مثل /start یا /clear)، به عنوان پست جدید پردازش نشود
-    if message.text and message.text.startswith("/"):
-        return
+    if message.text and message.text.startswith("/"): return
 
     current_step = user_data.get(user_id, {}).get("step")
 
-    # ۱. حالت دریافت دکمه شیشه‌ای (تکی یا گروهی)
+    # ۱. تنظیم دکمه ثابت کانال
+    if current_step == "waiting_persistent_btn":
+        await save_persistent_button(message)
+        return
+
+    # ۲. دریافت دکمه معمولی
     if current_step == "waiting_button":
         await save_multiple_buttons(message)
         return
 
-    # ۲. حالت دریافت متن یا کپشن ویرایش شده
-    if current_step == "waiting_edit_text":
-        await save_edited_text(message)
+    # ۳. دریافت اسم برای دکمه‌های هم‌نام
+    if current_step == "waiting_same_name_title":
+        user_data[user_id]["same_name_title"] = message.text.strip()
+        user_data[user_id]["step"] = "waiting_same_name_links"
+        await message.answer(f"✅ اسم دکمه‌ها ثبت شد: <b>{message.text}</b>\n\n🔗 حالا لینک‌ها را خط به خط ارسال کنید:")
         return
 
-    # ۳. دریافت پیام جدید (متن، عکس، فیلم و...) برای ساخت پست از صفر
+    # ۴. دریافت لینک‌های دکمه‌های هم‌نام
+    if current_step == "waiting_same_name_links":
+        await save_same_name_buttons(message)
+        return
+
+    # ۵. استخراج لینک از پست فورواردی یا متنی
+    if current_step == "waiting_extract_links":
+        await extract_links_from_post(message)
+        return
+
+    # ۶. حالت دریافت متن یا کپشن ویرایش شده با حفظ فرمت کامل تلگرام
+    if current_step == "waiting_edit_text":
+        user_data[user_id]["edited_text"] = message.text if message.text else message.caption
+        user_data[user_id]["edited_entities"] = message.entities if message.entities else message.caption_entities
+        user_data[user_id]["step"] = None
+        await message.answer("✅ متن جدید با حفظ کامل استایل و فرمت ذخیره شد.")
+        await show_post_menu(message.chat.id, user_id)
+        return
+
+    # ۷. دریافت پست جدید (متن، عکس، فیلم و...)
     current_ch = user_data.get(user_id, {}).get("target_channel", CHANNEL_IDS[0] if CHANNEL_IDS else None)
     user_data[user_id] = {
         "message": message, 
         "edited_text": None, 
+        "edited_entities": None,
         "buttons": [], 
         "layout": "single",
         "step": None,
+        "same_name_title": None,
         "target_channel": current_ch
     }
     await show_post_menu(message.chat.id, user_id)
 
-# ================== منوی مدیریت دکمه‌ها، ویرایش و ارسال ==================
+# ================== منوی مدیریت پست ==================
 async def show_post_menu(chat_id, user_id):
     data = user_data.get(user_id)
     btn_count = len(data["buttons"])
     layout_text = "تک ردیفه 🟦" if data["layout"] == "single" else "دو ردیفه 🟩"
-    target_ch = data["target_channel"]
 
     text = (
         f"📝 <b>حالت: ساخت پست جدید</b>\n"
-        f"🎯 کانال هدف: <b>{target_ch}</b>\n"
-        f"🔢 تعداد دکمه‌های شیشه‌ای: {btn_count} عدد\n"
-        f"📐 چیدمان دکمه‌ها: **{layout_text}**\n\n"
-        "👇 دکمه‌های خود را اضافه کنید، متن را ویرایش کنید یا پست را ارسال کنید:"
+        f"🎯 کانال هدف: <b>{data['target_channel']}</b>\n"
+        f"🔢 دکمه‌های فعلی شما: {btn_count} عدد\n"
+        f"📐 چیدمان دکمه‌ها: <b>{layout_text}</b>\n\n"
+        "👇 گزینه‌های مدیریت دکمه‌ها و ارسال:"
     )
-    
     keyboard_structure = [
-        [InlineKeyboardButton(text="➕ اضافه کردن دکمه (تکی یا گروهی)", callback_data="add_button")],
+        [InlineKeyboardButton(text="➕ اضافه کردن دکمه (متن | لینک)", callback_data="add_button")],
+        [InlineKeyboardButton(text="🔗 دکمه‌های هم‌نام (فقط ارسال لینک)", callback_data="add_same_name_btn")],
+        [InlineKeyboardButton(text="📥 استخراج لینک از پست فورواردی", callback_data="extract_links_btn")],
+        [InlineKeyboardButton(text="✏️ ویرایش متنی دکمه‌های قبلی", callback_data="edit_existing_buttons")],
+        [InlineKeyboardButton(text="🗑️ ریست و پاک کردن دکمه‌ها", callback_data="reset_buttons")],
         [InlineKeyboardButton(text="📐 تغییر چیدمان دکمه‌ها", callback_data="toggle_layout")],
         [InlineKeyboardButton(text="✏️ ویرایش متن / کپشن پست", callback_data="edit_post_text")],
         [InlineKeyboardButton(text="👁️ پیش‌نمایش پست", callback_data="preview_post")],
-        [InlineKeyboardButton(text="📤 ارسال نهایی پست به کانال", callback_data="send_final_action")],
+        [InlineKeyboardButton(text="🚀 ارسال نهایی به کانال", callback_data="send_final_action")],
         [InlineKeyboardButton(text="🔙 انصراف و بازگشت", callback_data="back_to_start")]
     ]
-    
     await bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_structure))
 
-# --- بخش اضافه کردن هوشمند دکمه‌ها ---
+# --- پردازش ذخیره دکمه ثابت ---
+async def save_persistent_button(message: types.Message):
+    user_id = message.from_user.id
+    target_ch = user_data[user_id]['target_channel']
+    if message.text.strip() == "حذف":
+        if target_ch in channel_persistent_buttons: del channel_persistent_buttons[target_ch]
+        user_data[user_id]["step"] = None
+        await message.answer(f"✅ دکمه ثابت کانال {target_ch} حذف شد.")
+        return
+    if "|" not in message.text:
+        await message.answer("❌ فرمت اشتباه است. `متن | لینک` را رعایت کنید.")
+        return
+    try:
+        text, url = [x.strip() for x in message.text.split("|", 1)]
+        if not url.startswith("http"): url = "https://" + url
+        channel_persistent_buttons[target_ch] = {"text": text, "url": url}
+        user_data[user_id]["step"] = None
+        await message.answer(f"✅ دکمه ثابت کانال {target_ch} تنظیم شد.")
+    except: await message.answer("❌ خطا رخ داد.")
+
+# --- افزودن دکمه معمولی ---
 @dp.callback_query(lambda c: c.data == "add_button")
 async def add_button_prompt(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     if not is_admin(user_id): return
     user_data[user_id]["step"] = "waiting_button"
-    
-    instruction = (
-        "📌 **فرمت ارسال دکمه (تکی یا گروهی):**\n"
-        "<code>متن دکمه | لینک</code>\n\n"
-        "💡 **نکته عالی:** می‌توانید چند دکمه را یکجا بفرستید! کافیست هر دکمه را در یک **خط جدید** بنویسید. مانند:\n"
-        "<code>📥 دانلود فیلم | https://site.com/1</code>\n"
-        "<code>💬 بخش نظرات | https://site.com/2</code>"
-    )
-    await callback.message.answer(instruction)
+    await callback.message.answer("📌 فرمت دکمه‌ها را بفرستید:\n<code>متن دکمه | لینک</code>")
     await callback.answer()
 
 async def save_multiple_buttons(message: types.Message):
     user_id = message.from_user.id
-    
-    if message.text and message.text.startswith("/"):
-        user_data[user_id]["step"] = None
-        return
-
     lines = message.text.strip().split("\n")
     success_count = 0
-    
     for line in lines:
-        if not line.strip() or "|" not in line:
-            continue
+        if not line.strip() or "|" not in line: continue
         try:
             text, url = [x.strip() for x in line.split("|", 1)]
-            if not url.startswith("http"): 
-                url = "https://" + url
+            if not url.startswith("http"): url = "https://" + url
             user_data[user_id]["buttons"].append({"text": text, "url": url})
             success_count += 1
-        except:
-            continue
-            
+        except: continue
     if success_count > 0:
         user_data[user_id]["step"] = None
-        await message.answer(f"✅ تعداد {success_count} دکمه با موفقیت به لیست اضافه شد.")
+        await message.answer(f"✅ تعداد {success_count} دکمه اضافه شد.")
+        await show_post_menu(message.chat.id, user_id)
+    else: await message.answer("❌ فرمت رعایت نشده است.")
+
+# --- دکمه‌های هم‌نام ---
+@dp.callback_query(lambda c: c.data == "add_same_name_btn")
+async def add_same_name_prompt(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    if not is_admin(user_id): return
+    user_data[user_id]["step"] = "waiting_same_name_title"
+    await callback.message.answer("✍️ <b>اسم ثابت دکمه‌ها را وارد کنید:</b>")
+    await callback.answer()
+
+async def save_same_name_buttons(message: types.Message):
+    user_id = message.from_user.id
+    title = user_data[user_id]["same_name_title"]
+    lines = message.text.strip().split("\n")
+    success_count = 0
+    for line in lines:
+        url = line.strip()
+        if not url: continue
+        if not url.startswith("http"): url = "https://" + url
+        user_data[user_id]["buttons"].append({"text": title, "url": url})
+        success_count += 1
+    if success_count > 0:
+        user_data[user_id]["step"] = None
+        user_data[user_id]["same_name_title"] = None
+        await message.answer(f"✅ تعداد {success_count} دکمه هم‌نام ساخته شد.")
+        await show_post_menu(message.chat.id, user_id)
+    else: await message.answer("❌ لینکی یافت نشد.")
+
+# --- 🔥 قابلیت استخراج هوشمند لینک از پست فورواردی ---
+@dp.callback_query(lambda c: c.data == "extract_links_btn")
+async def extract_links_btn_prompt(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    if not is_admin(user_id): return
+    user_data[user_id]["step"] = "waiting_extract_links"
+    await callback.message.answer("📥 **حالا پست مورد نظر را به اینجا فوروارد کنید یا متن حاوی لینک را بفرستید:**\n(ربات تمام لینک‌های متنی و دکمه‌های شیشه‌ای آن را استخراج می‌کند)")
+    await callback.answer()
+
+async def extract_links_from_post(message: types.Message):
+    user_id = message.from_user.id
+    extracted_buttons = []
+
+    # ۱. استخراج از دکمه‌های شیشه‌ای خود پست ارسالی (اگر دکمه داشته باشد)
+    if message.reply_markup and message.reply_markup.inline_keyboard:
+        for row in message.reply_markup.inline_keyboard:
+            for btn in row:
+                if btn.url:
+                    extracted_buttons.append({"text": btn.text, "url": btn.url})
+
+    # ۲. استخراج لینک‌های متنی داخل متن یا کپشن (Hyperlinks & URLs)
+    text = message.text if message.text else message.caption
+    entities = message.entities if message.entities else message.caption_entities
+    
+    if text and entities:
+        for ent in entities:
+            if ent.type == "text_link": # لینک مخفی روی متن
+                btn_text = text[ent.offset : ent.offset + ent.length]
+                extracted_buttons.append({"text": btn_text, "url": ent.url})
+            elif ent.type == "url": # لینک مستقیم عریان
+                raw_url = text[ent.offset : ent.offset + ent.length]
+                extracted_buttons.append({"text": "🔗 لینک منبع", "url": raw_url})
+
+    if extracted_buttons:
+        user_data[user_id]["buttons"].extend(extracted_buttons)
+        user_data[user_id]["step"] = None
+        await message.answer(f"✅ موفقیت‌آمیز! تعداد {len(extracted_buttons)} دکمه هوشمند از پست فرستاده شده استخراج و اضافه شد.")
         await show_post_menu(message.chat.id, user_id)
     else:
-        await message.answer("❌ هیچ دکمه سالمی یافت نشد! لطفاً فرمت را رعایت کنید:\n`متن | لینک` (هر دکمه در یک خط)")
+        await message.answer("❌ هیچ لینکی در این پست پیدا نشد! لطفاً پست دیگری بفرستید یا دستور دیگری استفاده کنید.")
 
-# --- بخش ویرایش متن / کپشن ---
+# --- ✏️ قابلیت ویرایش متنی دکمه‌های قبلی (خروجی متنی قابل کپی) ---
+@dp.callback_query(lambda c: c.data == "edit_existing_buttons")
+async def edit_existing_buttons(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    if not is_admin(user_id): return
+    buttons = user_data[user_id]["buttons"]
+    
+    if not buttons:
+        return await callback.answer("⚠️ شما هنوز هیچ دکمه‌ای اضافه نکرده‌اید!", show_alert=True)
+    
+    # ساخت متن ساختاریافته دکمه‌ها با فرمت متن | لینک
+    lines = []
+    for b in buttons:
+        lines.append(f"{b['text']} | {b['url']}")
+    format_text = "\n".join(lines)
+    
+    # ریست کردن لیست دکمه‌ها جهت آماده‌سازی برای ویرایش جدید
+    user_data[user_id]["buttons"] = []
+    user_data[user_id]["step"] = "waiting_button"
+    
+    output_message = (
+        "✏️ <b>دکمه‌های قبلی شما ریست شدند و در کادر زیر قرار گرفتند.</b>\n\n"
+        "کافیست کادر زیر را کپی کرده، تغییرات خود را اعمال کنید و همینجا ارسال کنید:\n\n"
+        f"<code>{format_text}</code>"
+    )
+    await callback.message.answer(output_message)
+    await callback.answer()
+
+# --- ریست دکمه‌ها ---
+@dp.callback_query(lambda c: c.data == "reset_buttons")
+async def reset_buttons(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    if not is_admin(user_id): return
+    user_data[user_id]["buttons"] = []
+    await callback.answer("🗑️ دکمه‌های این پست ریست شدند.", show_alert=True)
+    await show_post_menu(callback.message.chat.id, user_id)
+
+# --- ویرایش متن / کپشن پست ---
 @dp.callback_query(lambda c: c.data == "edit_post_text")
 async def edit_post_text_prompt(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     if not is_admin(user_id): return
     user_data[user_id]["step"] = "waiting_edit_text"
-    await callback.message.answer("✏️ **حالا متن یا کپشن جدید خود را ارسال کنید:**\n(دکمه‌های شیشه‌ای قبلی شما بدون تغییر باقی می‌مانند)")
+    await callback.message.answer("✏️ **حالا متن یا کپشن جدید خود را ارسال کنید:**\n(تمامی فرمت‌های تلگرام حفظ می‌شوند)")
     await callback.answer()
 
-async def save_edited_text(message: types.Message):
-    user_id = message.from_user.id
-    
-    if message.text and message.text.startswith("/"):
-        user_data[user_id]["step"] = None
-        return
-
-    user_data[user_id]["edited_text"] = message.text
-    user_data[user_id]["step"] = None
-    await message.answer("✅ متن جدید با موفقیت ذخیره شد.")
-    await show_post_menu(message.chat.id, user_id)
-
-# --- چیدمان دکمه‌ها ---
+# --- تغییر چیدمان ---
 @dp.callback_query(lambda c: c.data == "toggle_layout")
 async def toggle_layout(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -287,18 +385,24 @@ async def toggle_layout(callback: types.CallbackQuery):
     await callback.answer("📐 چیدمان دکمه‌ها تغییر کرد.")
     await show_post_menu(callback.message.chat.id, user_id)
 
-def build_keyboard(buttons, layout):
-    if not buttons: return None
+# --- ساخت کیبورد نهایی ترکیبی با دکمه ثابت کانال ---
+def build_keyboard(buttons, layout, target_channel):
+    all_buttons = list(buttons)
+    p_btn = channel_persistent_buttons.get(target_channel)
+    if p_btn: all_buttons.append({"text": p_btn["text"], "url": p_btn["url"]})
+    if not all_buttons: return None
     inline_keyboard = []
     if layout == "single":
-        for b in buttons: inline_keyboard.append([InlineKeyboardButton(text=b["text"], url=b["url"])])
+        for b in all_buttons: inline_keyboard.append([InlineKeyboardButton(text=b["text"], url=b["url"])])
     else:
         row = []
-        for b in buttons:
+        for b in all_buttons:
+            if p_btn and b["url"] == p_btn["url"] and b["text"] == p_btn["text"]:
+                if row: inline_keyboard.append(row); row = []
+                inline_keyboard.append([InlineKeyboardButton(text=b["text"], url=b["url"])])
+                continue
             row.append(InlineKeyboardButton(text=b["text"], url=b["url"]))
-            if len(row) == 2:
-                inline_keyboard.append(row)
-                row = []
+            if len(row) == 2: inline_keyboard.append(row); row = []
         if row: inline_keyboard.append(row)
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
@@ -310,54 +414,50 @@ async def preview_post(callback: types.CallbackQuery):
     data = user_data.get(user_id)
     if data["message"]:
         await callback.message.answer("👇 👁️ **پیش‌نمایش پست شما:**")
-        await forward_or_send(callback.message.chat.id, data["message"], build_keyboard(data["buttons"], data["layout"]), data["edited_text"])
+        kb = build_keyboard(data["buttons"], data["layout"], data["target_channel"])
+        await forward_or_send(callback.message.chat.id, data["message"], kb, data["edited_text"], data["edited_entities"])
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "send_final_action")
 async def send_final_action(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     if not is_admin(user_id): return
-    
     data = user_data.get(user_id)
-    if not data["message"]:
-        return await callback.answer("⚠️ پستی برای ارسال وجود ندارد. ابتدا یک فایل یا متن بفرستید.", show_alert=True)
-        
+    if not data["message"]: return await callback.answer("⚠️ پستی وجود ندارد.", show_alert=True)
     target_ch = data["target_channel"]
-    keyboard = build_keyboard(data["buttons"], data["layout"])
-    
+    kb = build_keyboard(data["buttons"], data["layout"], target_ch)
     try:
-        await forward_or_send(target_ch, data["message"], keyboard, data["edited_text"])
-        await callback.answer("🚀 پست با موفقیت به کانال ارسال شد!", show_alert=True)
-        
+        await forward_or_send(target_ch, data["message"], kb, data["edited_text"], data["edited_entities"])
+        await callback.answer("🚀 پست با موفقیت و حفظ کامل فرمت‌ها ارسال شد!", show_alert=True)
         init_user_data(user_id)
         await callback.message.delete()
         await start(callback.message)
-    except Exception as e:
-        await callback.answer(f"❌ خطا! مطمئن شوید ربات در کانال ادمین است.\nمشخصات: {str(e)}", show_alert=True)
+    except Exception as e: await callback.answer(f"❌ خطا! مشخصات: {str(e)}", show_alert=True)
 
-# تابع هوشمند ارسال با پشتیبانی از متن جایگزین
-async def forward_or_send(target_chat, original, keyboard, edited_text=None):
-    text_to_send = edited_text if edited_text else (original.text if original.text else original.caption)
+# 🔥 تابع هوشمند ارسال با پشتیبانی کامل از کدهای فرمت‌دهی (Entities) بدون ریست شدن استایل‌ها
+async def forward_or_send(target_chat, original, keyboard, edited_text=None, edited_entities=None):
+    # اگر متن ادیت شده بود از آن استفاده می‌کند در غیر این صورت از فرمت پیش‌فرض خود پست ارسالی استفاده می‌کند
+    text_to_send = edited_text if edited_text is not None else (original.text if original.text else original.caption)
+    entities_to_send = edited_entities if edited_text is not None else (original.entities if original.text else original.caption_entities)
 
+    # برای حفظ ۱۰۰٪ فرمت‌ها پارس مد لغو شده و مستقیما آبجکت انتیتی‌ها پاس داده می‌شود
     if original.text: 
-        await bot.send_message(target_chat, text_to_send, reply_markup=keyboard)
+        await bot.send_message(target_chat, text_to_send, entities=entities_to_send, reply_markup=keyboard)
     elif original.photo: 
-        await bot.send_photo(target_chat, original.photo[-1].file_id, caption=text_to_send, reply_markup=keyboard)
+        await bot.send_photo(target_chat, original.photo[-1].file_id, caption=text_to_send, caption_entities=entities_to_send, reply_markup=keyboard)
     elif original.video: 
-        await bot.send_video(target_chat, original.video.file_id, caption=text_to_send, reply_markup=keyboard)
+        await bot.send_video(target_chat, original.video.file_id, caption=text_to_send, caption_entities=entities_to_send, reply_markup=keyboard)
     elif original.document: 
-        await bot.send_document(target_chat, original.document.file_id, caption=text_to_send, reply_markup=keyboard)
+        await bot.send_document(target_chat, original.document.file_id, caption=text_to_send, caption_entities=entities_to_send, reply_markup=keyboard)
     elif original.voice: 
-        await bot.send_voice(target_chat, original.voice.file_id, caption=text_to_send, reply_markup=keyboard)
+        await bot.send_voice(target_chat, original.voice.file_id, caption=text_to_send, caption_entities=entities_to_send, reply_markup=keyboard)
     elif original.audio: 
-        await bot.send_audio(target_chat, original.audio.file_id, caption=text_to_send, reply_markup=keyboard)
+        await bot.send_audio(target_chat, original.audio.file_id, caption=text_to_send, caption_entities=entities_to_send, reply_markup=keyboard)
 
 @dp.callback_query(lambda c: c.data == "back_to_start")
 async def back_to_start(callback: types.CallbackQuery):
     if not is_admin(callback.from_user.id): return
-    await callback.message.delete()
-    init_user_data(callback.from_user.id)
-    await start(callback.message)
+    await callback.message.delete(); init_user_data(callback.from_user.id); await start(callback.message)
 
 # ================== Webhook Server ==================
 @app.post("/webhook")
@@ -369,18 +469,14 @@ async def webhook(request: Request):
 
 @app.on_event("startup")
 async def on_startup():
-    # ⭐ اضافه کردن منوی دستورات به تلگرام به محض روشن شدن ربات
     await bot.set_my_commands([
         BotCommand(command="start", description="🏠 منوی اصلی"),
-        BotCommand(command="clear", description="🧹 پاکسازی حافظه و رفع هنگ"),
-        BotCommand(command="help", description="❓ راهنمای ربات")
+        BotCommand(command="clear", description="🧹 پاکسازی حافظه پست جاری")
     ])
-
     webhook_url = os.getenv("WEBHOOK_URL")
     if webhook_url:
         if not webhook_url.endswith("/webhook"): webhook_url = webhook_url.rstrip("/") + "/webhook"
         await bot.set_webhook(webhook_url)
-        print(f"🚀 Webhook set to: {webhook_url}")
 
 if __name__ == "__main__":
     import uvicorn
