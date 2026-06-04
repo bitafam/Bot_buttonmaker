@@ -215,7 +215,7 @@ async def show_post_menu(chat_id, user_id):
     ]
     await bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_structure))
 
-# --- پردازش ذخیره دکمه ثابت ---
+# --- پردازش ذخیره دکمه ثابت (پاک‌سازی بدون دست‌کاری آدرس) ---
 async def save_persistent_button(message: types.Message):
     user_id = message.from_user.id
     target_ch = user_data[user_id]['target_channel']
@@ -229,7 +229,7 @@ async def save_persistent_button(message: types.Message):
         return
     try:
         text, url = [x.strip() for x in message.text.split("|", 1)]
-        if not url.startswith("http"): url = "https://" + url
+        # حذف هرگونه ولیدیشن خودکار پروتکل وب
         channel_persistent_buttons[target_ch] = {"text": text, "url": url}
         user_data[user_id]["step"] = None
         await message.answer(f"✅ دکمه ثابت کانال {target_ch} تنظیم شد.")
@@ -244,6 +244,7 @@ async def add_button_prompt(callback: types.CallbackQuery):
     await callback.message.answer("📌 فرمت دکمه‌ها را بفرستید:\n<code>متن دکمه | لینک</code>")
     await callback.answer()
 
+# --- متد ذخیره دکمه‌های معمولی (پاک‌سازی بدون دست‌کاری آدرس) ---
 async def save_multiple_buttons(message: types.Message):
     user_id = message.from_user.id
     lines = message.text.strip().split("\n")
@@ -252,7 +253,7 @@ async def save_multiple_buttons(message: types.Message):
         if not line.strip() or "|" not in line: continue
         try:
             text, url = [x.strip() for x in line.split("|", 1)]
-            if not url.startswith("http"): url = "https://" + url
+            # بدون دست‌کاری، عینا ذخیره می‌شود
             user_data[user_id]["buttons"].append({"text": text, "url": url})
             success_count += 1
         except: continue
@@ -271,6 +272,7 @@ async def add_same_name_prompt(callback: types.CallbackQuery):
     await callback.message.answer("✍️ <b>اسم ثابت دکمه‌ها را وارد کنید:</b>")
     await callback.answer()
 
+# --- متد ذخیره لینک‌های هم‌نام (پاک‌سازی بدون دست‌کاری آدرس) ---
 async def save_same_name_buttons(message: types.Message):
     user_id = message.from_user.id
     title = user_data[user_id]["same_name_title"]
@@ -279,7 +281,7 @@ async def save_same_name_buttons(message: types.Message):
     for line in lines:
         url = line.strip()
         if not url: continue
-        if not url.startswith("http"): url = "https://" + url
+        # بدون هیچگونه پیشوند اجباری، عین داده ورودی ذخیره می‌شود
         user_data[user_id]["buttons"].append({"text": title, "url": url})
         success_count += 1
     if success_count > 0:
@@ -436,11 +438,9 @@ async def send_final_action(callback: types.CallbackQuery):
 
 # 🔥 تابع هوشمند ارسال با پشتیبانی کامل از کدهای فرمت‌دهی (Entities) بدون ریست شدن استایل‌ها
 async def forward_or_send(target_chat, original, keyboard, edited_text=None, edited_entities=None):
-    # اگر متن ادیت شده بود از آن استفاده می‌کند در غیر این صورت از فرمت پیش‌فرض خود پست ارسالی استفاده می‌کند
     text_to_send = edited_text if edited_text is not None else (original.text if original.text else original.caption)
     entities_to_send = edited_entities if edited_text is not None else (original.entities if original.text else original.caption_entities)
 
-    # برای حفظ ۱۰۰٪ فرمت‌ها پارس مد لغو شده و مستقیما آبجکت انتیتی‌ها پاس داده می‌شود
     if original.text: 
         await bot.send_message(target_chat, text_to_send, entities=entities_to_send, reply_markup=keyboard)
     elif original.photo: 
