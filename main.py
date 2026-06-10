@@ -52,11 +52,13 @@ def init_user_data(user_id: int, reset_channel: bool = False):
     prev_channel = user_data.get(user_id, {}).get("target_channel") if not reset_channel else None
     user_data[user_id] = {
         "message": None, 
+        "edited_text": None,          # ذخیره متن ویرایش شده دستی
+        "edited_entities": None,      # ذخیره انتیتی‌های متن ویرایش شده
         "buttons": [], 
-        "layout": "single", 
+        "layout": "single",           # گزینه‌ها: single (یک ستونه), double (دو ستونه), triple (سه ستونه)
         "step": None, 
         "same_name_title": None,
-        "extracted_temp_links": [], # برای ذخیره موقت لینک‌های استخراج شده
+        "extracted_temp_links": [], 
         "target_channel": prev_channel if prev_channel else (CHANNEL_IDS[0] if CHANNEL_IDS else None)
     }
 
@@ -83,7 +85,7 @@ async def start(message: types.Message):
 async def clear_memory_command(message: types.Message):
     if not is_admin(message.from_user.id): return
     init_user_data(message.from_user.id, reset_channel=False)
-    await message.answer("🧹 <b>حافظه موقت پست جاری با موفقیت پاکسازی و ریست شد!</b>\n(دکمه‌های ثابت کانال‌ها در هارد سرور محفوظ هستند)")
+    await message.answer("🧹 <b>حافظه موقت پست جاری با موفقیت پاکسازی و ریست شد!</b>\n(دکمه‌های ثابت کانال‌ها کماکان فعال هستند.)")
 
 # ================== ⚙️ پنل مدیریت و تنظیمات پیشرفته ==================
 @dp.callback_query(lambda c: c.data == "admin_panel")
@@ -104,7 +106,7 @@ async def admin_panel(callback: types.CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 تغییر کانال هدف", callback_data="change_channel")],
         [InlineKeyboardButton(text="💎 تنظیم دکمه ثابت این کانال", callback_data="setup_persistent_btn")],
-        [InlineKeyboardButton(text="🔄 ریستارت کل ربات و حافظه پست", callback_data="restart_bot_data")],
+        [InlineKeyboardButton(text="🔄 ریستارت کل ربات و حافظه", callback_data="restart_bot_data")],
         [InlineKeyboardButton(text="🔙 بازگشت به منوی اصلی", callback_data="back_to_start")]
     ])
     await callback.message.edit_text(text, reply_markup=kb)
@@ -138,7 +140,7 @@ async def restart_bot_data(callback: types.CallbackQuery):
     channel_persistent_buttons.clear()
     if os.path.exists(DB_FILE): os.remove(DB_FILE)
     init_user_data(user_id, reset_channel=True)
-    await callback.answer("🔄 ربات و فایل دکمه‌های ثابت کاملاً ریست شدند.", show_alert=True)
+    await callback.answer("🔄 ربات و حافظه دکمه‌های ثابت کاملاً ریستارت شد.", show_alert=True)
     await callback.message.delete()
     await start(callback.message)
 
@@ -179,7 +181,7 @@ async def handle_incoming_messages(message: types.Message):
             user_data[user_id]["buttons"].append({"text": title, "url": l})
         user_data[user_id]["step"] = None
         user_data[user_id]["extracted_temp_links"] = []
-        await message.answer(f"✅ تعداد {len(links)} دکمه با نام ثابت <b>{title}</b> ساخته و اضافه شد.")
+        await message.answer(f"✅ تعداد {len(links)} دکمه با نام ثابت <b>{title}</b> اضافه شد.")
         await show_post_menu(message.chat.id, user_id)
         return
 
@@ -194,32 +196,78 @@ async def handle_incoming_messages(message: types.Message):
         await save_same_name_buttons(message)
         return
 
-    # ۵. استخراج لینک با متد انتخابی (هم‌نام یا ویرایش دستی)
+    # ۵. استخراج لینک با متد انتخابی
     if current_step in ["waiting_extract_links_same", "waiting_extract_links_manual"]:
         await process_link_extraction(message, current_step)
         return
 
-    # ۶. دریافت پست جدید (فقط زمانی که هیچ استپی فعال نیست)
+    # ۶. حالت دریافت متن یا کپشن ویرایش شده با حفظ کامل استایل تلگرام
+    if current_step == "waiting_edit_text":
+        user_data[user_id]["edited_text"] = message.text if message.text else message.caption
+        user_data[user_id]["edited_entities"] = message.entities if message.entities else message.caption_entities
+        user_data[user_id]["step"] = None
+        await message.answer("✅ متن جدید با حفظ کامل فرمت و استایل‌ها ذخیره شد.")
+        await show_post_menu(message.chat.id, user_id)
+        return
+
+    # ۷. دریافت پست جدید (هم‌زمان لینک‌ها را استخراج می‌کند و متن اصلی + فرمت را نگه می‌دارد)
     current_ch = user_data[user_id].get("target_channel", CHANNEL_IDS[0] if CHANNEL_IDS else None)
+    
+    # استخراج لینک اتوماتیک از خود پست ارسالی کاربر
+    auto_buttons = []
+    raw_text = message.text if message.text else message.caption
+    entities = message.entities if message.entities else message.caption_entities
+    
+    if message.reply_markup and message.reply_markup.inline_keyboard:
+        for row in message.reply_markup.inline_keyboard:
+            for btn in row:
+                if btn.url: auto_buttons.append({"text": btn.text, "url": btn.url})
+                
+    if raw_text and entities:
+        for ent in entities:
+            if ent.type == "text_link":
+                btn_text = raw_text[ent.offset : ent.offset + ent.length]
+                auto_buttons.append({"text": btn_text, "url": ent.url})
+
+    if raw_text:
+        pattern = r'(https?://[^\s<>"]+|tg://[^\s<>"]+)'
+        all_urls = re.findall(pattern, raw_text)
+        for url in all_urls:
+            url_clean = url.rstrip('.,;)!]')
+            if url_clean not in [x["url"] for x in auto_buttons]:
+                auto_buttons.append({"text": "🔗 لینک منبع", "url": url_clean})
+
+    # ذخیره در حافظه موقت
     user_data[user_id] = {
         "message": message, 
-        "buttons": [], 
+        "edited_text": None, 
+        "edited_entities": None,
+        "buttons": auto_buttons, # دکمه‌های استخراج شده اتوماتیک از ابتدا اینجا قرار می‌گیرند
         "layout": "single",
         "step": None,
         "same_name_title": None,
         "extracted_temp_links": [],
         "target_channel": current_ch
     }
+    
+    extra_info = f"\n📊 تعداد {len(auto_buttons)} لینک هم اتوماتیک استخراج و دکمه شد." if auto_buttons else ""
+    await message.answer(f"📥 پست شما با حفظ کامل فرمت‌ها دریافت شد.{extra_info}")
     await show_post_menu(message.chat.id, user_id)
 
 # ================== منوی مدیریت پست ==================
 async def show_post_menu(chat_id, user_id):
     data = user_data.get(user_id)
     btn_count = len(data["buttons"])
-    layout_text = "تک ردیفه 🟦" if data["layout"] == "single" else "دو ردیفه 🟩"
+    
+    if data["layout"] == "single":
+        layout_text = "تک ستونه 🟦"
+    elif data["layout"] == "double":
+        layout_text = "دو ستونه 🟩"
+    else:
+        layout_text = "سه ستونه 🟨"
 
     text = (
-        f"📝 <b>حالت: ساخت پست جدید</b>\n"
+        f"📝 <b>حالت: مدیریت پست جاری</b>\n"
         f"🎯 کانال هدف: <b>{data['target_channel']}</b>\n"
         f"🔢 دکمه‌های فعلی شما: {btn_count} عدد\n"
         f"📐 چیدمان دکمه‌ها: <b>{layout_text}</b>\n\n"
@@ -232,14 +280,15 @@ async def show_post_menu(chat_id, user_id):
         [InlineKeyboardButton(text="📥 استخراج لینک (نمایش مونو و ویرایش دستی)", callback_data="extract_manual")],
         [InlineKeyboardButton(text="✏️ ویرایش متنی دکمه‌های قبلی", callback_data="edit_existing_buttons")],
         [InlineKeyboardButton(text="🗑️ ریست و پاک کردن دکمه‌ها", callback_data="reset_buttons")],
-        [InlineKeyboardButton(text="📐 تغییر چیدمان دکمه‌ها", callback_data="toggle_layout")],
+        [InlineKeyboardButton(text="📐 تغییر چیدمان (۱، ۲ یا ۳ ستونه)", callback_data="toggle_layout")],
+        [InlineKeyboardButton(text="✏️ ویرایش متن / کپشن پست", callback_data="edit_post_text")],
         [InlineKeyboardButton(text="👁️ پیش‌نمایش پست", callback_data="preview_post")],
         [InlineKeyboardButton(text="🚀 ارسال نهایی به کانال", callback_data="send_final_action")],
         [InlineKeyboardButton(text="🔙 انصراف و بازگشت", callback_data="back_to_start")]
     ]
     await bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_structure))
 
-# --- پردازش ذخیره دکمه ثابت دائمی روی هارد سرور ---
+# --- پردازش ذخیره دکمه ثابت دائمی ---
 async def save_persistent_button(message: types.Message):
     user_id = message.from_user.id
     target_ch = user_data[user_id]['target_channel']
@@ -259,7 +308,7 @@ async def save_persistent_button(message: types.Message):
         channel_persistent_buttons[target_ch] = {"text": text, "url": url}
         save_persistent_buttons(channel_persistent_buttons)
         user_data[user_id]["step"] = None
-        await message.answer(f"✅ دکمه ثابت کانال {target_ch} به صورت دائمی در دیتابیس ذخیره شد.")
+        await message.answer(f"✅ دکمه ثابت کانال {target_ch} به صورت دائمی ذخیره شد.")
     except: await message.answer("❌ خطا رخ داد.")
 
 # --- افزودن دکمه معمولی ---
@@ -314,28 +363,25 @@ async def save_same_name_buttons(message: types.Message):
         await show_post_menu(message.chat.id, user_id)
     else: await message.answer("❌ لینکی یافت نشد.")
 
-# --- 🚀 موتور هوشمند و پیشرفته استخراج تمام لینک‌ها حتی پروتکل tg:// ---
+# --- موتور پیشرفته استخراج لینک (حتی دستی یا پروتکل tg://) ---
 @dp.callback_query(lambda c: c.data in ["extract_same_name", "extract_manual"])
 async def trigger_extraction_step(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     if not is_admin(user_id): return
     step_name = "waiting_extract_links_same" if callback.data == "extract_same_name" else "waiting_extract_links_manual"
     user_data[user_id]["step"] = step_name
-    await callback.message.answer("📥 **پست خود را فوروارد کنید یا متن حاوی لینک‌ها (حتی آدرس‌های دستی یا tg://) را اینجا بفرستید:**")
+    await callback.message.answer("📥 **پست جدید را فوروارد کنید یا متن حاوی لینک‌ها (شامل الگوی tg://) را بفرستید:**")
     await callback.answer()
 
 async def process_link_extraction(message: types.Message, current_step: str):
     user_id = message.from_user.id
-    extracted_list = [] # لیستی از دیکشنری‌های {"text": ..., "url": ...}
+    extracted_list = []
 
-    # ۱. استخراج از دکمه‌های شیشه‌ای موجود در پست فورواردی
     if message.reply_markup and message.reply_markup.inline_keyboard:
         for row in message.reply_markup.inline_keyboard:
             for btn in row:
-                if btn.url:
-                    extracted_list.append({"text": btn.text, "url": btn.url})
+                if btn.url: extracted_list.append({"text": btn.text, "url": btn.url})
 
-    # ۲. استخراج لینک‌های مخفی (Hyperlinks) توسعه‌یافته تلگرام
     raw_text = message.text if message.text else message.caption
     entities = message.entities if message.entities else message.caption_entities
     
@@ -345,51 +391,37 @@ async def process_link_extraction(message: types.Message, current_step: str):
                 btn_text = raw_text[ent.offset : ent.offset + ent.length]
                 extracted_list.append({"text": btn_text, "url": ent.url})
 
-    # ۳. موتور قدرتمند رگکس (Regex) برای صید هر چیزی که شبیه لینک وب یا پروتکل tg:// است
     if raw_text:
-        # صید تمام الگوهای شامل http, https و ساختارهای اختصاصی tg://
         pattern = r'(https?://[^\s<>"]+|tg://[^\s<>"]+)'
         all_regex_urls = re.findall(pattern, raw_text)
         for url in all_regex_urls:
-            # تمیزکاری انتهای آدرس‌ها از علائم نگارشی احتمالی
             url_clean = url.rstrip('.,;)!]')
-            # برای جلوگیری از تکرار لینک‌هایی که بالاتر از انتیتی‌ها گرفته شده بودند
             if url_clean not in [x["url"] for x in extracted_list]:
                 extracted_list.append({"text": "🔗 لینک منبع", "url": url_clean})
 
     if not extracted_list:
-        await message.answer("❌ هیچ لینکی (حتی با الگوی tg://) در این پست پیدا نشد! دوباره تلاش کنید.")
+        await message.answer("❌ هیچ لینکی یافت نشد!")
         return
 
-    # شاخه اول: ساخت دکمه‌های هم‌نام
     if current_step == "waiting_extract_links_same":
         user_data[user_id]["extracted_temp_links"] = [x["url"] for x in extracted_list]
         user_data[user_id]["step"] = "waiting_extract_same_name_title"
-        await message.answer(f"📥 تعداد {len(extracted_list)} لینک پیدا شد.\n\n✍️ **حالا اسمی که می‌خواهید روی همه این دکمه‌ها گذاشته شود را بفرستید:**")
+        await message.answer(f"📥 تعداد {len(extracted_list)} لینک پیدا شد.\n\n✍️ **حالا اسم دکمه ثابت را بفرستید:**")
     
-    # شاخه دوم: خروجی به صورت Mono و ورود به استپ ویرایش دستی
     elif current_step == "waiting_extract_links_manual":
         lines = []
-        for item in extracted_list:
-            lines.append(f"{item['text']} | {item['url']}")
+        for item in extracted_list: lines.append(f"{item['text']} | {item['url']}")
         mono_formatted = "\n".join(lines)
+        user_data[user_id]["step"] = "waiting_button"
+        await message.answer(f"📥 **لینک‌ها استخراج شد:**\n\n<code>{mono_formatted}</code>")
 
-        user_data[user_id]["step"] = "waiting_button" # آماده دریافت ادیت شده کاربر
-        output_msg = (
-            f"📥 **تعداد {len(extracted_list)} لینک استخراج شد.**\n\n"
-            "📋 کادر زیر را کپی کنید، نام یا لینک‌ها را ویرایش کنید و به عنوان پاسخ بفرستید:\n\n"
-            f"<code>{mono_formatted}</code>"
-        )
-        await message.answer(output_msg)
-
-# --- قابلیت ویرایش متنی دکمه‌های قبلی ---
+# --- ویرایش متنی دکمه‌های قبلی ---
 @dp.callback_query(lambda c: c.data == "edit_existing_buttons")
 async def edit_existing_buttons(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     if not is_admin(user_id): return
     buttons = user_data[user_id]["buttons"]
-    if not buttons:
-        return await callback.answer("⚠️ شما هنوز هیچ دکمه‌ای اضافه نکرده‌اید!", show_alert=True)
+    if not buttons: return await callback.answer("⚠️ دکمه‌ای وجود ندارد!", show_alert=True)
     
     lines = []
     for b in buttons: lines.append(f"{b['text']} | {b['url']}")
@@ -397,12 +429,7 @@ async def edit_existing_buttons(callback: types.CallbackQuery):
     
     user_data[user_id]["buttons"] = []
     user_data[user_id]["step"] = "waiting_button"
-    
-    output_message = (
-        "✏️ <b>دکمه‌های قبلی ریست و در کادر زیر قرار گرفتند.</b>\n\n"
-        f"<code>{format_text}</code>"
-    )
-    await callback.message.answer(output_message)
+    await callback.message.answer(f"✏️ دکمه‌های قبلی ریست شدند. ویرایش کرده و بفرستید:\n\n<code>{format_text}</code>")
     await callback.answer()
 
 # --- ریست دکمه‌ها ---
@@ -411,56 +438,101 @@ async def reset_buttons(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     if not is_admin(user_id): return
     user_data[user_id]["buttons"] = []
-    await callback.answer("🗑️ دکمه‌های این پست ریست شدند.", show_alert=True)
+    await callback.answer("🗑️ دکمه‌ها ریست شدند.")
     await show_post_menu(callback.message.chat.id, user_id)
 
-# --- تغییر چیدمان ---
+# --- ویرایش متن / کپشن پست ---
+@dp.callback_query(lambda c: c.data == "edit_post_text")
+async def edit_post_text_prompt(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    if not is_admin(user_id): return
+    user_data[user_id]["step"] = "waiting_edit_text"
+    await callback.message.answer("✏️ **حالا متن یا کپشن جدید خود را با فرمت‌های دلخواه ارسال کنید:**")
+    await callback.answer()
+
+# --- تغییر چیدمان (لوپ ۱ تا ۳ ستونه) ---
 @dp.callback_query(lambda c: c.data == "toggle_layout")
 async def toggle_layout(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     if not is_admin(user_id): return
-    user_data[user_id]["layout"] = "double" if user_data[user_id]["layout"] == "single" else "single"
+    current_layout = user_data[user_id]["layout"]
+    
+    if current_layout == "single":
+        user_data[user_id]["layout"] = "double"
+    elif current_layout == "double":
+        user_data[user_id]["layout"] = "triple"
+    else:
+        user_data[user_id]["layout"] = "single"
+        
     await callback.answer("📐 چیدمان دکمه‌ها تغییر کرد.")
     await show_post_menu(callback.message.chat.id, user_id)
 
-# --- ساخت کیبورد نهایی ترکیبی با دکمه ثابت کانال ---
+# --- ساخت کیبورد نهایی ترکیبی ۱، ۲ و ۳ ستونه ---
 def build_keyboard(buttons, layout, target_channel):
     all_buttons = list(buttons)
     p_btn = channel_persistent_buttons.get(target_channel)
     if p_btn: all_buttons.append({"text": p_btn["text"], "url": p_btn["url"]})
     if not all_buttons: return None
+    
     inline_keyboard = []
+    
     if layout == "single":
         for b in all_buttons: inline_keyboard.append([InlineKeyboardButton(text=b["text"], url=b["url"])])
     else:
+        max_cols = 2 if layout == "double" else "triple"
+        max_cols = 2 if layout == "double" else 3
         row = []
         for b in all_buttons:
+            # دکمه ثابت همیشه ترجیح داده می‌شود تک‌ردیفه در آخر چسبانده شود
             if p_btn and b["url"] == p_btn["url"] and b["text"] == p_btn["text"]:
                 if row: inline_keyboard.append(row); row = []
                 inline_keyboard.append([InlineKeyboardButton(text=b["text"], url=b["url"])])
                 continue
             row.append(InlineKeyboardButton(text=b["text"], url=b["url"]))
-            if len(row) == 2: inline_keyboard.append(row); row = []
+            if len(row) == max_cols: inline_keyboard.append(row); row = []
         if row: inline_keyboard.append(row)
+        
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
-# ================== عملیات نهایی ارسال و پیش‌نمایش کاملاً تضمینی ==================
+# --- تابع هوشمند فرستنده کمکی با ادغام فایل کپی و متن ویرایشی ---
+async def send_perfect_post(target_chat_id, data, keyboard):
+    orig = data["message"]
+    
+    # اگر متن ویرایش نشده باشد، از متد کپی نیتیو فوق‌العاده امن تلگرام استفاده می‌شود
+    if data["edited_text"] is None:
+        await bot.copy_message(
+            chat_id=target_chat_id,
+            from_chat_id=orig.chat.id,
+            message_id=orig.message_id,
+            reply_markup=keyboard
+        )
+    else:
+        # اگر کاربر متن را دستی ویرایش کرده باشد، بر اساس نوع رسانه با حفظ انتیتی ارسال می‌شود
+        txt = data["edited_text"]
+        ent = data["edited_entities"]
+        if orig.text:
+            await bot.send_message(target_chat_id, txt, entities=ent, reply_markup=keyboard)
+        elif orig.photo:
+            await bot.send_photo(target_chat_id, orig.photo[-1].file_id, caption=txt, caption_entities=ent, reply_markup=keyboard)
+        elif orig.video:
+            await bot.send_video(target_chat_id, orig.video.file_id, caption=txt, caption_entities=ent, reply_markup=keyboard)
+        elif orig.document:
+            await bot.send_document(target_chat_id, orig.document.file_id, caption=txt, caption_entities=ent, reply_markup=keyboard)
+        elif orig.voice:
+            await bot.send_voice(target_chat_id, orig.voice.file_id, caption=txt, caption_entities=ent, reply_markup=keyboard)
+        elif orig.audio:
+            await bot.send_audio(target_chat_id, orig.audio.file_id, caption=txt, caption_entities=ent, reply_markup=keyboard)
+
+# ================== عملیات نهایی ارسال و پیش‌نمایش ==================
 @dp.callback_query(lambda c: c.data == "preview_post")
 async def preview_post(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     if not is_admin(user_id): return
     data = user_data.get(user_id)
     if data["message"]:
-        await callback.message.answer("👇 👁️ **پیش‌نمایش ۱۰۰٪ کپی شده پست شما:**")
+        await callback.message.answer("👇 👁️ **پیش‌نمایش پست شما با حفظ کامل استایل‌ها:**")
         kb = build_keyboard(data["buttons"], data["layout"], data["target_channel"])
-        
-        # با استفاده از متد کپی نیتیو تلگرام، فرمت‌ها در کلاینت شما ۱ به ۱ لود می‌شوند
-        await bot.copy_message(
-            chat_id=callback.message.chat.id,
-            from_chat_id=data["message"].chat.id,
-            message_id=data["message"].message_id,
-            reply_markup=kb
-        )
+        await send_perfect_post(callback.message.chat.id, data, kb)
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "send_final_action")
@@ -469,17 +541,12 @@ async def send_final_action(callback: types.CallbackQuery):
     if not is_admin(user_id): return
     data = user_data.get(user_id)
     if not data["message"]: return await callback.answer("⚠️ پستی وجود ندارد.", show_alert=True)
+    
     target_ch = data["target_channel"]
     kb = build_keyboard(data["buttons"], data["layout"], target_ch)
     try:
-        # ارسال نهایی به کانال هدف با کپی برداری کلون شده و بینقص ساختار تلگرام
-        await bot.copy_message(
-            chat_id=target_ch,
-            from_chat_id=data["message"].chat.id,
-            message_id=data["message"].message_id,
-            reply_markup=kb
-        )
-        await callback.answer("🚀 پست با موفقیت و کپی‌برداری دقیق استایل‌ها ارسال شد!", show_alert=True)
+        await send_perfect_post(target_ch, data, kb)
+        await callback.answer("🚀 پست با موفقیت به کانال ارسال شد!", show_alert=True)
         init_user_data(user_id)
         await callback.message.delete()
         await start(callback.message)
