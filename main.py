@@ -452,37 +452,39 @@ async def toggle_layout(callback: types.CallbackQuery):
     await callback.answer("📐 چیدمان دکمه‌ها تغییر کرد.")
     await show_post_menu(callback.message.chat.id, user_id)
 
-# --- 🛠️ اصلاح سازنده کیبورد جهت جلوگیری از حذف دکمه‌ها ---
+# --- 🛠️ ساخت کیبورد شیشه‌ای به صورت کاملاً استاندارد و بدون حذف دکمه‌ها ---
 def build_keyboard(buttons, layout, target_channel):
-    all_buttons = list(buttons)
-    p_btn = channel_persistent_buttons.get(target_channel)
-    if p_btn: all_buttons.append({"text": p_btn["text"], "url": p_btn["url"]})
-    if not all_buttons: return None
-    
     inline_keyboard = []
     
-    if layout == "single":
-        for b in all_buttons: 
-            if b.get("url"): inline_keyboard.append([InlineKeyboardButton(text=b["text"], url=b["url"])])
-    else:
-        max_cols = 2 if layout == "double" else 3
-        row = []
-        for b in all_buttons:
-            if not b.get("url"): continue
-            if p_btn and b["url"] == p_btn["url"] and b["text"] == p_btn["text"]:
-                if row: inline_keyboard.append(row); row = []
+    # ابتدا چیدمان دکمه‌های اصلی کاربر بر اساس لایوت درخواستی
+    if buttons:
+        valid_buttons = [b for b in buttons if b.get("url")]
+        if layout == "single":
+            for b in valid_buttons:
                 inline_keyboard.append([InlineKeyboardButton(text=b["text"], url=b["url"])])
-                continue
-            row.append(InlineKeyboardButton(text=b["text"], url=b["url"]))
-            if len(row) == max_cols: inline_keyboard.append(row); row = []
-        if row: inline_keyboard.append(row)
+        else:
+            max_cols = 2 if layout == "double" else 3
+            row = []
+            for b in valid_buttons:
+                row.append(InlineKeyboardButton(text=b["text"], url=b["url"]))
+                if len(row) == max_cols:
+                    inline_keyboard.append(row)
+                    row = []
+            if row:
+                inline_keyboard.append(row)
+                
+    # سپس اضافه کردن دکمه ثابت کانال در یک ردیف جداگانه و مستقل در انتهای کیبورد
+    p_btn = channel_persistent_buttons.get(target_channel)
+    if p_btn and p_btn.get("url"):
+        inline_keyboard.append([InlineKeyboardButton(text=p_btn["text"], url=p_btn["url"])])
         
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard) if inline_keyboard else None
 
-# --- 🛠️ شاهکار اصلاح نهایی فرستنده: حل قطعی مشکل غیب شدن دکمه‌ها موقع نبود انتیتی ---
+# --- 🛠️ بازنویسی و اصلاح ۱۰۰٪ فرستنده جهت الصاق اجباری دکمه‌ها در هنگام ویرایش پست ---
 async def send_perfect_post(target_chat_id, data, keyboard):
     orig = data["message"]
     
+    # اگر متن ویرایش نشده است، پست اصلی کپی می‌شود
     if data["edited_text"] is None:
         await bot.copy_message(
             chat_id=target_chat_id,
@@ -494,31 +496,35 @@ async def send_perfect_post(target_chat_id, data, keyboard):
         txt = data["edited_text"]
         ent = data["edited_entities"]
         
-        # اگر انتیتی خالی بود، برای جلوگیری از کرش و غیب شدن دکمه‌ها، پارامتر تفکیک ست می‌شود
-        p_mode = None if ent else "HTML"
-        entities_arg = ent if ent else None
-        
+        # تعیین پارامترهای فرمت به صورت داینامیک تا کیبورد به خاطر نبود انتیتی غیب نشود
+        kwargs = {"reply_markup": keyboard}
+        if ent:
+            kwargs["parse_mode"] = None
+        else:
+            kwargs["parse_mode"] = "HTML"
+
+        # تفکیک دقیق انواع فایل‌ها و ارسال همراه با کیبورد و انتیتی‌ها
         if orig.text:
-            if p_mode: await bot.send_message(target_chat_id, text=txt, parse_mode=p_mode, reply_markup=keyboard)
-            else: await bot.send_message(target_chat_id, text=txt, entities=entities_arg, parse_mode=None, reply_markup=keyboard)
+            if ent: kwargs["entities"] = ent
+            await bot.send_message(target_chat_id, text=txt, **kwargs)
         elif orig.photo:
-            if p_mode: await bot.send_photo(target_chat_id, photo=orig.photo[-1].file_id, caption=txt, parse_mode=p_mode, reply_markup=keyboard)
-            else: await bot.send_photo(target_chat_id, photo=orig.photo[-1].file_id, caption=txt, caption_entities=entities_arg, parse_mode=None, reply_markup=keyboard)
+            if ent: kwargs["caption_entities"] = ent
+            await bot.send_photo(target_chat_id, photo=orig.photo[-1].file_id, caption=txt, **kwargs)
         elif orig.video:
-            if p_mode: await bot.send_video(target_chat_id, video=orig.video.file_id, caption=txt, parse_mode=p_mode, reply_markup=keyboard)
-            else: await bot.send_video(target_chat_id, video=orig.video.file_id, caption=txt, caption_entities=entities_arg, parse_mode=None, reply_markup=keyboard)
+            if ent: kwargs["caption_entities"] = ent
+            await bot.send_video(target_chat_id, video=orig.video.file_id, caption=txt, **kwargs)
         elif orig.document:
-            if p_mode: await bot.send_document(target_chat_id, document=orig.document.file_id, caption=txt, parse_mode=p_mode, reply_markup=keyboard)
-            else: await bot.send_document(target_chat_id, document=orig.document.file_id, caption=txt, caption_entities=entities_arg, parse_mode=None, reply_markup=keyboard)
+            if ent: kwargs["caption_entities"] = ent
+            await bot.send_document(target_chat_id, document=orig.document.file_id, caption=txt, **kwargs)
         elif orig.voice:
-            if p_mode: await bot.send_voice(target_chat_id, voice=orig.voice.file_id, caption=txt, parse_mode=p_mode, reply_markup=keyboard)
-            else: await bot.send_voice(target_chat_id, voice=orig.voice.file_id, caption=txt, caption_entities=entities_arg, parse_mode=None, reply_markup=keyboard)
+            if ent: kwargs["caption_entities"] = ent
+            await bot.send_voice(target_chat_id, voice=orig.voice.file_id, caption=txt, **kwargs)
         elif orig.audio:
-            if p_mode: await bot.send_audio(target_chat_id, audio=orig.audio.file_id, caption=txt, parse_mode=p_mode, reply_markup=keyboard)
-            else: await bot.send_audio(target_chat_id, audio=orig.audio.file_id, caption=txt, caption_entities=entities_arg, parse_mode=None, reply_markup=keyboard)
+            if ent: kwargs["caption_entities"] = ent
+            await bot.send_audio(target_chat_id, audio=orig.audio.file_id, caption=txt, **kwargs)
         elif orig.animation:
-            if p_mode: await bot.send_animation(target_chat_id, animation=orig.animation.file_id, caption=txt, parse_mode=p_mode, reply_markup=keyboard)
-            else: await bot.send_animation(target_chat_id, animation=orig.animation.file_id, caption=txt, caption_entities=entities_arg, parse_mode=None, reply_markup=keyboard)
+            if ent: kwargs["caption_entities"] = ent
+            await bot.send_animation(target_chat_id, animation=orig.animation.file_id, caption=txt, **kwargs)
 
 # ================== عملیات نهایی ==================
 @dp.callback_query(lambda c: c.data == "preview_post")
