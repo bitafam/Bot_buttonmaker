@@ -190,7 +190,6 @@ async def handle_incoming_messages(message: types.Message):
         await process_link_extraction(message, current_step)
         return
 
-    # 🛠️ اصلاح فوق حیاتی: دریافت متن ویرایش شده و ذخیره انتیتی‌ها به عنوان بیسِ اصلی
     if current_step == "waiting_edit_text":
         user_data[user_id]["edited_text"] = message.text if message.text else message.caption
         user_data[user_id]["edited_entities"] = message.entities if message.text else message.caption_entities
@@ -199,7 +198,6 @@ async def handle_incoming_messages(message: types.Message):
         await show_post_menu(message.chat.id, user_id)
         return
 
-    # دریافت پست اولیه کاربر و استخراج اتوماتیک بدون تداخل
     current_ch = user_data[user_id].get("target_channel", CHANNEL_IDS[0] if CHANNEL_IDS else None)
     auto_buttons = []
     raw_text = message.text if message.text else message.caption
@@ -344,7 +342,6 @@ async def save_same_name_buttons(message: types.Message):
         await show_post_menu(message.chat.id, user_id)
     else: await message.answer("❌ لینکی یافت نشد.")
 
-# --- 🚀 اصلاح ریشه باگ استخراج دستی با پروتکل‌های چسبیده و نمایش مونو بدون خرابکاری HTML ---
 @dp.callback_query(lambda c: c.data in ["extract_same_name", "extract_manual"])
 async def trigger_extraction_step(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -400,7 +397,6 @@ async def process_link_extraction(message: types.Message, current_step: str):
             lines.append(f"{item['text']} | {item['url']}")
         mono_formatted = "\n".join(lines)
         user_data[user_id]["step"] = "waiting_button"
-        # استفاده از متد فرستادن متن خام امن بدون تداخل تگ‌های HTML ربات با مقادیر داخلی کاراکترهای خاص tg://
         await bot.send_message(
             chat_id=message.chat.id,
             text=f"📥 **ویرایش کرده و بفرستید:**\n\n<code>{mono_formatted}</code>",
@@ -456,7 +452,7 @@ async def toggle_layout(callback: types.CallbackQuery):
     await callback.answer("📐 چیدمان دکمه‌ها تغییر کرد.")
     await show_post_menu(callback.message.chat.id, user_id)
 
-# --- ساخت کیبورد نهایی ترکیبی ---
+# --- 🛠️ اصلاح سازنده کیبورد جهت جلوگیری از حذف دکمه‌ها ---
 def build_keyboard(buttons, layout, target_channel):
     all_buttons = list(buttons)
     p_btn = channel_persistent_buttons.get(target_channel)
@@ -466,12 +462,12 @@ def build_keyboard(buttons, layout, target_channel):
     inline_keyboard = []
     
     if layout == "single":
-        for b in all_buttons: inline_keyboard.append([InlineKeyboardButton(text=b["text"], url=b["url"])])
+        for b in all_buttons: 
+            if b.get("url"): inline_keyboard.append([InlineKeyboardButton(text=b["text"], url=b["url"])])
     else:
         max_cols = 2 if layout == "double" else 3
         row = []
         for b in all_buttons:
-            # بررسی صحت کلید لینک‌های tg:// جهت جلوگیری از کرش ریپلی مارکاپ
             if not b.get("url"): continue
             if p_btn and b["url"] == p_btn["url"] and b["text"] == p_btn["text"]:
                 if row: inline_keyboard.append(row); row = []
@@ -481,9 +477,9 @@ def build_keyboard(buttons, layout, target_channel):
             if len(row) == max_cols: inline_keyboard.append(row); row = []
         if row: inline_keyboard.append(row)
         
-    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard) if inline_keyboard else None
 
-# --- 🛠️ شاهکار اصلاح فرستنده: تفکیک ۱۰۰٪ پارامترهای کپشن مدیا و متن متنی برای انواع فایل‌ها ---
+# --- 🛠️ شاهکار اصلاح نهایی فرستنده: حل قطعی مشکل غیب شدن دکمه‌ها موقع نبود انتیتی ---
 async def send_perfect_post(target_chat_id, data, keyboard):
     orig = data["message"]
     
@@ -498,21 +494,31 @@ async def send_perfect_post(target_chat_id, data, keyboard):
         txt = data["edited_text"]
         ent = data["edited_entities"]
         
-        # هندلینگ فوق دقیق نوع مدیا بر اساس متدهای اختصاصی تلگرام برای حفظ قطعی فرمت‌ها در تمام پسوندها
+        # اگر انتیتی خالی بود، برای جلوگیری از کرش و غیب شدن دکمه‌ها، پارامتر تفکیک ست می‌شود
+        p_mode = None if ent else "HTML"
+        entities_arg = ent if ent else None
+        
         if orig.text:
-            await bot.send_message(target_chat_id, text=txt, entities=ent, reply_markup=keyboard, parse_mode=None)
+            if p_mode: await bot.send_message(target_chat_id, text=txt, parse_mode=p_mode, reply_markup=keyboard)
+            else: await bot.send_message(target_chat_id, text=txt, entities=entities_arg, parse_mode=None, reply_markup=keyboard)
         elif orig.photo:
-            await bot.send_photo(target_chat_id, photo=orig.photo[-1].file_id, caption=txt, caption_entities=ent, reply_markup=keyboard, parse_mode=None)
+            if p_mode: await bot.send_photo(target_chat_id, photo=orig.photo[-1].file_id, caption=txt, parse_mode=p_mode, reply_markup=keyboard)
+            else: await bot.send_photo(target_chat_id, photo=orig.photo[-1].file_id, caption=txt, caption_entities=entities_arg, parse_mode=None, reply_markup=keyboard)
         elif orig.video:
-            await bot.send_video(target_chat_id, video=orig.video.file_id, caption=txt, caption_entities=ent, reply_markup=keyboard, parse_mode=None)
+            if p_mode: await bot.send_video(target_chat_id, video=orig.video.file_id, caption=txt, parse_mode=p_mode, reply_markup=keyboard)
+            else: await bot.send_video(target_chat_id, video=orig.video.file_id, caption=txt, caption_entities=entities_arg, parse_mode=None, reply_markup=keyboard)
         elif orig.document:
-            await bot.send_document(target_chat_id, document=orig.document.file_id, caption=txt, caption_entities=ent, reply_markup=keyboard, parse_mode=None)
+            if p_mode: await bot.send_document(target_chat_id, document=orig.document.file_id, caption=txt, parse_mode=p_mode, reply_markup=keyboard)
+            else: await bot.send_document(target_chat_id, document=orig.document.file_id, caption=txt, caption_entities=entities_arg, parse_mode=None, reply_markup=keyboard)
         elif orig.voice:
-            await bot.send_voice(target_chat_id, voice=orig.voice.file_id, caption=txt, caption_entities=ent, reply_markup=keyboard, parse_mode=None)
+            if p_mode: await bot.send_voice(target_chat_id, voice=orig.voice.file_id, caption=txt, parse_mode=p_mode, reply_markup=keyboard)
+            else: await bot.send_voice(target_chat_id, voice=orig.voice.file_id, caption=txt, caption_entities=entities_arg, parse_mode=None, reply_markup=keyboard)
         elif orig.audio:
-            await bot.send_audio(target_chat_id, audio=orig.audio.file_id, caption=txt, caption_entities=ent, reply_markup=keyboard, parse_mode=None)
-        elif orig.animation: # پشتیبانی از فایل‌های گیف
-            await bot.send_animation(target_chat_id, animation=orig.animation.file_id, caption=txt, caption_entities=ent, reply_markup=keyboard, parse_mode=None)
+            if p_mode: await bot.send_audio(target_chat_id, audio=orig.audio.file_id, caption=txt, parse_mode=p_mode, reply_markup=keyboard)
+            else: await bot.send_audio(target_chat_id, audio=orig.audio.file_id, caption=txt, caption_entities=entities_arg, parse_mode=None, reply_markup=keyboard)
+        elif orig.animation:
+            if p_mode: await bot.send_animation(target_chat_id, animation=orig.animation.file_id, caption=txt, parse_mode=p_mode, reply_markup=keyboard)
+            else: await bot.send_animation(target_chat_id, animation=orig.animation.file_id, caption=txt, caption_entities=entities_arg, parse_mode=None, reply_markup=keyboard)
 
 # ================== عملیات نهایی ==================
 @dp.callback_query(lambda c: c.data == "preview_post")
